@@ -1,0 +1,50 @@
+# Production stack (image from GHCR, same as former n8n-install service).
+# Data volume is the existing Docker volume created by the localai project.
+#
+# Usage: docker compose -f docker-compose.prod.yml --env-file .env up -d
+
+name: codex-lb
+
+services:
+  codex-lb:
+    image: ghcr.io/soju06/codex-lb:1.8.1
+    container_name: codex-lb
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      HTTP_PROXY: ${GOST_PROXY_URL:-}
+      HTTPS_PROXY: ${GOST_PROXY_URL:-}
+      http_proxy: ${GOST_PROXY_URL:-}
+      https_proxy: ${GOST_PROXY_URL:-}
+      NO_PROXY: ${GOST_NO_PROXY:-}
+      no_proxy: ${GOST_NO_PROXY:-}
+      CODEX_LB_OAUTH_REDIRECT_URI: https://${CODEX_LB_HOSTNAME}/auth/callback
+      CODEX_LB_FIREWALL_TRUST_PROXY_HEADERS: "true"
+    ports:
+      - "2455:2455"
+      - "1455:1455"
+    volumes:
+      - codex-lb-data:/var/lib/codex-lb
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "http_proxy= https_proxy= HTTP_PROXY= HTTPS_PROXY= python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:2455/health')\" || exit 1",
+        ]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "1m"
+        max-file: "1"
+
+volumes:
+  codex-lb-data:
+    external: true
+    name: localai_codex-lb-data
