@@ -1,0 +1,20 @@
+1. Жмать F12
+2. Перейти на вкладку консоль и запустить скрипт
+====================================================================
+async function checkSession() {
+  const res = await fetch('/api/auth/session');
+  const session = await res.json();
+  
+  if (Object.keys(session).length === 0) {
+    console.warn("Сессия пуста. Возможные причины: вы не вошли в аккаунт или кука HttpOnly не была отправлена.");
+  } else {
+    console.log("Данные найдены:", session);
+  }
+}
+
+checkSession();
+====================================================================
+Проброс куки в другой браузер:
+Соблюдам чистоту прокси IP 2ip.io
+====================================================================
+document.cookie = "__Secure-next-auth.session-token=ВАШ_ТОКЕН; Domain=.chatgpt.com; Path=/; Secure; SameSite=Lax";
