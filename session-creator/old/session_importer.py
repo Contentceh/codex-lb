@@ -18,6 +18,16 @@ import json
 import base64
 from datetime import datetime, timezone
 
+
+def normalize_input(value: str) -> str:
+    """Удаляет пробелы и внешние кавычки у вставленного значения."""
+    cleaned = value.strip()
+
+    if len(cleaned) >= 2 and cleaned[0] == cleaned[-1] and cleaned[0] in {'"', "'"}:
+        cleaned = cleaned[1:-1].strip()
+
+    return cleaned
+
 def create_dummy_id_token(email: str) -> str:
     """Создает фейковый JWT-токен, содержащий email в payload."""
     header = {"alg": "HS256", "typ": "JWT"}
@@ -65,9 +75,9 @@ if __name__ == "__main__":
     print("Генератор файла auth.json для codex-lb")
     print("-" * 40)
     
-    user_access_token = input("Введите access_token (начинается на eyJ...): ").strip()
-    user_refresh_token = input("Введите refresh_token (sessionToken): ").strip()
-    user_email = input("Введите email аккаунта: ").strip()
+    user_access_token = normalize_input(input("Введите access_token (начинается на eyJ...): "))
+    user_refresh_token = normalize_input(input("Введите refresh_token (sessionToken): "))
+    user_email = normalize_input(input("Введите email аккаунта: "))
     
     if user_access_token and user_refresh_token and user_email:
         generate_auth_file(user_access_token, user_refresh_token, user_email)

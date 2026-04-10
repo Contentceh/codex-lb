@@ -53,3 +53,7 @@ certs/
 .venv
 
 .omx/
+
+session-creator/sessions/*
+session-creator/*.har
+session-creator/*.json
