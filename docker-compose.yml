@@ -78,6 +78,6 @@ services:
 
 volumes:
   codex-lb-data:
-    name: codex-lb-data
+    name: localai_codex-lb-data
   codex-lb-postgres-data:
     name: codex-lb-postgres-data

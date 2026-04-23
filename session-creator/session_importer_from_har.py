@@ -1,19 +1,25 @@
 """
-Скрипт для генерации файла auth.json, совместимого с codex-lb, из HAR-файла.
+Скрипт для генерации файла auth.json, совместимого с codex-lb, из HAR-файла
+или из JSON-ответа GET https://chatgpt.com/api/auth/session.
 
-Что делает:
+Режим HAR:
 - находит access_token в заголовке Authorization;
 - собирает refresh_token из cookie __Secure-next-auth.session-token(.N);
-- извлекает email из access_token или cookie oai-client-auth-info;
-- сохраняет результат в файл auth_ДД.ММ.ГГГГ.json.
+- извлекает email из access_token или cookie oai-client-auth-info.
+
+Режим session JSON (--from-session-json):
+- access_token из поля accessToken;
+- refresh_token из поля sessionToken (как cookie сессии);
+- email из user.email или из JWT accessToken.
 
 По умолчанию работает с директорией ./sessions:
-- ищет HAR там;
-- рендерит JSON туда же.
+- ищет HAR или JSON там;
+- рендерит результат туда же.
 
 Использование:
     python session_importer_from_har.py
     python session_importer_from_har.py path/to/session.har
+    python session_importer_from_har.py --from-session-json path/to/session.json
 """
 
 from __future__ import annotations
@@ -239,6 +245,80 @@ def parse_har_file(har_path: Path) -> SessionData:
     )
 
 
+def parse_chatgpt_session_json(session_path: Path) -> SessionData:
+    """Парсит JSON ответа GET https://chatgpt.com/api/auth/session (сохранённый в файл)."""
+    try:
+        raw = session_path.read_text(encoding="utf-8")
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Файл '{session_path}' содержит некорректный JSON") from exc
+
+    if not isinstance(data, dict):
+        raise ValueError("JSON сессии должен быть объектом")
+
+    access_token = data.get("accessToken")
+    refresh_token = data.get("sessionToken")
+
+    if not access_token or not isinstance(access_token, str):
+        raise ValueError("В JSON нет непустого поля accessToken")
+    if not refresh_token or not isinstance(refresh_token, str):
+        raise ValueError("В JSON нет непустого поля sessionToken")
+
+    access_token = normalize_value(access_token)
+    refresh_token = normalize_value(refresh_token)
+
+    email: str | None = None
+    user = data.get("user")
+    if isinstance(user, dict):
+        raw_email = user.get("email")
+        if isinstance(raw_email, str):
+            email = normalize_value(raw_email) or None
+
+    if email is None:
+        email = extract_email_from_access_token(access_token)
+
+    if not email:
+        raise ValueError(
+            "Не удалось определить email: нет user.email и в accessToken нет профиля с email"
+        )
+
+    return SessionData(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        email=email,
+    )
+
+
+def resolve_session_json_path(raw_path: str | None, search_directory: Path) -> Path:
+    """Ищет JSON сессии: явный путь или единственный *.json в каталоге, кроме auth_*.json."""
+    if raw_path:
+        json_path = Path(raw_path).expanduser().resolve()
+        if not json_path.is_file():
+            raise ValueError(f"JSON-файл не найден: {json_path}")
+        return json_path
+
+    candidates = sorted(
+        path
+        for path in search_directory.glob("*.json")
+        if path.is_file() and not path.name.startswith("auth_")
+    )
+
+    if not candidates:
+        raise ValueError(
+            f"В директории '{search_directory}' не найдено JSON для импорта "
+            "(нужен один файл *.json, имя не начинается с auth_)"
+        )
+
+    if len(candidates) > 1:
+        file_list = ", ".join(path.name for path in candidates)
+        raise ValueError(
+            "Найдено несколько подходящих JSON. Укажите путь явно: "
+            f"{file_list}"
+        )
+
+    return candidates[0]
+
+
 def sanitize_email_for_filename(email: str) -> str:
     sanitized = email.strip().lower().replace("@", "_at_")
     sanitized = re.sub(r"[^a-z0-9._-]+", "_", sanitized)
@@ -300,12 +380,24 @@ def resolve_har_path(raw_path: str | None, search_directory: Path) -> Path:
 
 def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Создает auth_ДД.ММ.ГГГГ.json для codex-lb из HAR-файла.",
+        description="Создает auth_ДД.ММ.ГГГГ.json для codex-lb из HAR или JSON ответа /api/auth/session.",
     )
     parser.add_argument(
-        "har_file",
+        "-j",
+        "--from-session-json",
+        action="store_true",
+        help=(
+            "Читать JSON ответа GET https://chatgpt.com/api/auth/session "
+            "(поля accessToken, sessionToken, user) вместо HAR."
+        ),
+    )
+    parser.add_argument(
+        "input_file",
         nargs="?",
-        help="Путь до HAR-файла. Если не указан, будет использован единственный *.har в ./sessions.",
+        help=(
+            "Путь к входному файлу: HAR или JSON сессии (см. --from-session-json). "
+            "Если не указан — единственный подходящий файл в ./sessions."
+        ),
     )
     parser.add_argument(
         "-o",
@@ -322,8 +414,12 @@ def main() -> int:
     sessions_dir = default_sessions_dir(working_directory)
 
     try:
-        har_path = resolve_har_path(args.har_file, sessions_dir)
-        session_data = parse_har_file(har_path)
+        if args.from_session_json:
+            session_path = resolve_session_json_path(args.input_file, sessions_dir)
+            session_data = parse_chatgpt_session_json(session_path)
+        else:
+            har_path = resolve_har_path(args.input_file, sessions_dir)
+            session_data = parse_har_file(har_path)
 
         if args.output:
             output_path = Path(args.output).expanduser().resolve()
