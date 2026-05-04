@@ -31,7 +31,7 @@ from app.core.middleware.api_firewall import _parse_trusted_proxy_networks, reso
 from app.core.openai.chat_requests import ChatCompletionsRequest
 from app.core.openai.chat_responses import ChatCompletionResult, collect_chat_completion, stream_chat_chunks
 from app.core.openai.exceptions import ClientPayloadError
-from app.core.openai.images import V1ImageResponse, V1ImagesGenerationsRequest
+from app.core.openai.images import V1ImageResponse, V1ImagesEditsForm, V1ImagesGenerationsRequest
 from app.core.openai.model_registry import UpstreamModel, get_model_registry, is_public_model
 from app.core.openai.models import (
     CompactResponseResult,
@@ -71,9 +71,11 @@ from app.modules.proxy.helpers import _rate_limit_details
 from app.modules.proxy.http_bridge_forwarding import parse_forwarded_request
 from app.modules.proxy.images_service import (
     collect_responses_stream_for_images,
+    images_edit_to_responses_request,
     images_generation_to_responses_request,
     images_response_from_responses,
     translate_responses_stream_to_images_stream,
+    validate_edits_payload,
     validate_generations_payload,
 )
 from app.modules.proxy.request_policy import (
@@ -324,6 +326,130 @@ async def v1_images_generations(
 
     try:
         responses_output, terminal_error = await collect_responses_stream_for_images(stream, captured=captured)
+    except ProxyResponseError as exc:
+        await _release_reservation(reservation)
+        error = _parse_error_envelope(exc.payload)
+        return _logged_error_json_response(
+            request,
+            exc.status_code,
+            error.model_dump(mode="json", exclude_none=True),
+            headers=rate_limit_headers,
+        )
+
+    if terminal_error is not None:
+        return _logged_error_json_response(request, 502, terminal_error, headers=rate_limit_headers)
+    assert responses_output is not None
+    image_result = images_response_from_responses(responses_output)
+    if isinstance(image_result, dict):
+        return _logged_error_json_response(request, 502, image_result, headers=rate_limit_headers)
+    return JSONResponse(
+        content=image_result.model_dump(mode="json", exclude_none=True),
+        headers=rate_limit_headers,
+    )
+
+
+@v1_router.post(
+    "/images/edits",
+    response_model=V1ImageResponse,
+    responses={
+        200: {
+            "content": {
+                "text/event-stream": {
+                    "schema": {"type": "string"},
+                }
+            }
+        }
+    },
+)
+async def v1_images_edits(
+    request: Request,
+    image: list[UploadFile] = File(default_factory=list, alias="image"),
+    image_brackets: list[UploadFile] = File(default_factory=list, alias="image[]"),
+    mask: UploadFile | None = File(None),
+    model: str | None = Form(None),
+    prompt: str = Form(...),
+    n: int = Form(1),
+    size: str = Form("auto"),
+    quality: str = Form("auto"),
+    background: str = Form("auto"),
+    output_format: str = Form("png"),
+    output_compression: int = Form(100),
+    moderation: str = Form("auto"),
+    partial_images: int | None = Form(None),
+    stream: bool = Form(False),
+    input_fidelity: str | None = Form(None),
+    user: str | None = Form(None),
+    context: ProxyContext = Depends(get_proxy_context),
+    api_key: ApiKeyData | None = Security(validate_proxy_api_key),
+) -> Response:
+    rate_limit_headers = await context.service.rate_limit_headers()
+    try:
+        payload = V1ImagesEditsForm.model_validate(
+            {
+                "model": model,
+                "prompt": prompt,
+                "n": n,
+                "size": size,
+                "quality": quality,
+                "background": background,
+                "output_format": output_format,
+                "output_compression": output_compression,
+                "moderation": moderation,
+                "partial_images": partial_images,
+                "stream": stream,
+                "input_fidelity": input_fidelity,
+                "user": user,
+            }
+        )
+        image_payload = validate_edits_payload(payload)
+    except ClientPayloadError as exc:
+        error = openai_client_payload_error(exc)
+        return _logged_error_json_response(request, 400, error, headers=rate_limit_headers)
+    except ValidationError as exc:
+        error = openai_validation_error(exc)
+        return _logged_error_json_response(request, 400, error, headers=rate_limit_headers)
+
+    assert image_payload.model is not None
+    validate_model_access(api_key, image_payload.model)
+    reservation = await _enforce_request_limits(
+        api_key,
+        request_model=image_payload.model,
+        request_service_tier=None,
+    )
+
+    try:
+        image_parts = await _read_image_edit_uploads([*image, *image_brackets])
+        mask_part = None if mask is None else await _read_image_edit_upload(mask)
+        responses_payload = images_edit_to_responses_request(
+            image_payload,
+            host_model=get_settings().images_host_model,
+            images=image_parts,
+            mask=mask_part,
+        )
+        captured: dict[str, object] = {}
+        stream_iter = context.service.stream_responses(
+            responses_payload,
+            request.headers,
+            codex_session_affinity=False,
+            propagate_http_errors=True,
+            openai_cache_affinity=True,
+            api_key=api_key,
+            api_key_reservation=reservation,
+        )
+
+        if image_payload.stream:
+            image_stream = translate_responses_stream_to_images_stream(stream_iter, captured=captured, is_edit=True)
+            return StreamingResponse(
+                image_stream,
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", **rate_limit_headers},
+            )
+
+        responses_output, terminal_error = await collect_responses_stream_for_images(stream_iter, captured=captured)
+    except ClientPayloadError as exc:
+        await _release_reservation(reservation)
+        error = openai_client_payload_error(exc)
+        return _logged_error_json_response(request, 400, error, headers=rate_limit_headers)
     except ProxyResponseError as exc:
         await _release_reservation(reservation)
         error = _parse_error_envelope(exc.payload)
@@ -1248,6 +1374,32 @@ async def _transcribe_request(
     finally:
         await _release_reservation(reservation)
     return JSONResponse(content=result, headers=rate_limit_headers)
+
+
+async def _read_image_edit_uploads(files: list[UploadFile]) -> list[tuple[bytes, str | None]]:
+    images: list[tuple[bytes, str | None]] = []
+    for file in files:
+        images.append(await _read_image_edit_upload(file))
+    if not images:
+        raise ClientPayloadError(
+            "/v1/images/edits requires at least one image file",
+            param="image",
+            code="invalid_request_error",
+            error_type="invalid_request_error",
+        )
+    return images
+
+
+async def _read_image_edit_upload(file: UploadFile) -> tuple[bytes, str | None]:
+    content = await file.read()
+    if not content:
+        raise ClientPayloadError(
+            "image files must not be empty",
+            param="image",
+            code="invalid_request_error",
+            error_type="invalid_request_error",
+        )
+    return content, file.content_type
 
 
 @usage_router.get("/api/codex/usage", response_model=RateLimitStatusPayload)
