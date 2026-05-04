@@ -387,6 +387,7 @@ class ProxyService:
                 api_key_reservation=api_key_reservation,
                 suppress_text_done_events=suppress_text_done_events,
                 request_transport=_REQUEST_TRANSPORT_HTTP,
+                request_log_model=None,
             ):
                 yield line
             return
@@ -6350,7 +6351,7 @@ class ProxyService:
         api_key_reservation: ApiKeyUsageReservationData | None,
         suppress_text_done_events: bool,
         request_transport: str,
-        request_log_model: str | None,
+        request_log_model: str | None = None,
     ) -> AsyncIterator[str]:
         request_id = ensure_request_id()
         start = time.monotonic()
