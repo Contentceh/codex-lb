@@ -12,12 +12,14 @@ translation here.
 
 from __future__ import annotations
 
+import base64
 import logging
 from typing import Final
 
 from app.core.config.settings import get_settings
 from app.core.openai.exceptions import ClientPayloadError
 from app.core.openai.images import (
+    V1ImagesEditsForm,
     V1ImagesGenerationsRequest,
     is_supported_image_model,
     validate_image_request_parameters,
@@ -35,6 +37,13 @@ _IMAGE_GENERATION_INSTRUCTIONS: Final[str] = (
     "tool exactly once and return only that tool call. Do not produce any "
     "additional text output. Mirror the user's request verbatim into the tool's "
     "prompt argument."
+)
+
+#: Instruction tail appended to edit prompts so the host model knows that any
+#: trailing input_image acts as a mask (since OpenAI's Images Edits API has a
+#: distinct ``mask`` slot but the Responses image_generation tool does not).
+_IMAGE_EDIT_MASK_HINT: Final[str] = (
+    "\n\n(The final attached image is a transparent mask: only modify the regions where the mask is non-transparent.)"
 )
 
 # ---------------------------------------------------------------------------
@@ -55,6 +64,7 @@ def _build_image_generation_tool(
     partial_images: int | None,
     input_fidelity: str | None,
     streaming: bool,
+    is_edit: bool = False,
 ) -> dict[str, JsonValue]:
     # NOTE: the upstream ``image_generation`` tool config does not accept
     # ``n``. ``validate_image_request_parameters`` unconditionally
@@ -75,6 +85,13 @@ def _build_image_generation_tool(
         "output_compression": output_compression,
         "moderation": moderation,
     }
+    if is_edit:
+        # Force the edit code path so the host model treats the attached
+        # input_image(s) as a source/mask pair instead of inspiration for
+        # a fresh generation. Without this the default "auto" action lets
+        # the model decide between generation and editing, which can
+        # silently break the edits contract.
+        tool["action"] = "edit"
     if input_fidelity is not None:
         tool["input_fidelity"] = input_fidelity
     if streaming and partial_images is not None and partial_images > 0:
@@ -95,6 +112,16 @@ def _build_user_message_input(
             "content": content,
         }
     ]
+
+
+def _build_input_image_part(image_bytes: bytes, *, mime_type: str | None) -> dict[str, JsonValue]:
+    """Build a Responses ``input_image`` content part as a base64 data URL."""
+    resolved_mime = (mime_type or "image/png").strip() or "image/png"
+    encoded = base64.b64encode(image_bytes).decode("ascii")
+    return {
+        "type": "input_image",
+        "image_url": f"data:{resolved_mime};base64,{encoded}",
+    }
 
 
 def images_generation_to_responses_request(
@@ -139,6 +166,76 @@ def images_generation_to_responses_request(
             # the auto choice would surface as a 5xx through this
             # adapter even though the request shape was valid.
             "tool_choice": {"type": "image_generation"},
+            "stream": True,
+            "store": False,
+        }
+    )
+
+
+def images_edit_to_responses_request(
+    payload: V1ImagesEditsForm,
+    *,
+    host_model: str,
+    images: list[tuple[bytes, str | None]],
+    mask: tuple[bytes, str | None] | None,
+) -> ResponsesRequest:
+    """Translate a ``/v1/images/edits`` request into a Responses request.
+
+    ``images`` is a non-empty list of ``(bytes, content_type)`` tuples
+    representing the multipart ``image`` parts. ``mask`` is the optional
+    ``mask`` part with the same shape; when provided, it is appended after
+    the source images and the prompt is amended with a deterministic hint
+    so the host model treats it correctly.
+    """
+    if not images:
+        # Caller is expected to validate this beforehand, but guard so we
+        # never silently produce an image-less Responses request.
+        raise ValueError("/v1/images/edits requires at least one image part")
+
+    streaming = bool(payload.stream)
+    attached: list[dict[str, JsonValue]] = []
+    for image_bytes, mime_type in images:
+        attached.append(_build_input_image_part(image_bytes, mime_type=mime_type))
+    if mask is not None:
+        mask_bytes, mask_mime = mask
+        attached.append(_build_input_image_part(mask_bytes, mime_type=mask_mime))
+
+    prompt_text = payload.prompt
+    if mask is not None:
+        prompt_text = f"{prompt_text}{_IMAGE_EDIT_MASK_HINT}"
+
+    # ``validate_edits_payload`` resolves ``payload.model`` to a concrete
+    # ``gpt-image-*`` value before this is ever called.
+    assert payload.model is not None, "payload.model must be resolved before translation"
+    tool = _build_image_generation_tool(
+        model=payload.model,
+        n=payload.n,
+        size=payload.size,
+        quality=payload.quality,
+        background=payload.background,
+        output_format=payload.output_format,
+        output_compression=payload.output_compression,
+        moderation=payload.moderation,
+        partial_images=payload.partial_images,
+        input_fidelity=payload.input_fidelity,
+        streaming=streaming,
+        is_edit=True,
+    )
+    return ResponsesRequest.model_validate(
+        {
+            "model": host_model,
+            "instructions": _IMAGE_GENERATION_INSTRUCTIONS,
+            "input": _build_user_message_input(prompt_text, attached_images=attached),
+            "tools": [tool],
+            # Force the host model to invoke the image_generation tool.
+            # Leaving this on "auto" lets the model return a refusal or
+            # plain text instead, which would surface as a 5xx through
+            # this adapter even though the request shape was valid. See
+            # the matching forced tool call in
+            # ``images_generation_to_responses_request``.
+            "tool_choice": {"type": "image_generation"},
+            # See ``images_generation_to_responses_request`` for why this is
+            # always True regardless of what the public client requested.
             "stream": True,
             "store": False,
         }
@@ -197,5 +294,30 @@ def validate_generations_payload(payload: V1ImagesGenerationsRequest) -> V1Image
         # Pydantic models are immutable by default; build a copy with the
         # resolved model so downstream code can rely on ``payload.model``
         # always being a concrete ``gpt-image-*`` value.
+        return payload.model_copy(update={"model": resolved_model})
+    return payload
+
+
+def validate_edits_payload(payload: V1ImagesEditsForm) -> V1ImagesEditsForm:
+    """Apply the cross-field validation matrix and return the payload with
+    ``model`` populated to the configured default when the client omitted it.
+    """
+    settings = get_settings()
+    resolved_model = resolve_public_image_model(payload.model)
+    validate_image_request_parameters(
+        model=resolved_model,
+        quality=payload.quality,
+        size=payload.size,
+        background=payload.background,
+        output_format=payload.output_format,
+        moderation=payload.moderation,
+        input_fidelity=payload.input_fidelity,
+        is_edit=True,
+        n=payload.n,
+        partial_images=payload.partial_images,
+        output_compression=payload.output_compression,
+        images_max_partial_images=settings.images_max_partial_images,
+    )
+    if payload.model != resolved_model:
         return payload.model_copy(update={"model": resolved_model})
     return payload

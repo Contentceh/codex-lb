@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import base64
 from collections.abc import Mapping
 from typing import Any, cast
 
 import pytest
 
 from app.core.openai.exceptions import ClientPayloadError
-from app.core.openai.images import V1ImagesGenerationsRequest
+from app.core.openai.images import V1ImagesEditsForm, V1ImagesGenerationsRequest
 from app.core.types import JsonValue
 from app.modules.proxy import images_service
 
@@ -26,6 +27,10 @@ def _input_msg(responses: Any, index: int = 0) -> Mapping[str, JsonValue]:
 def _content_list(message: Mapping[str, JsonValue]) -> list[JsonValue]:
     """Return ``message['content']`` as a typed list for ``ty``."""
     return cast(list[JsonValue], message["content"])
+
+
+def _as_mapping(value: Any) -> Mapping[str, JsonValue]:
+    return cast(Mapping[str, JsonValue], value)
 
 
 class TestImagesGenerationToResponsesRequest:
@@ -129,6 +134,79 @@ class TestImagesGenerationToResponsesRequest:
             )
 
 
+class TestImagesEditToResponsesRequest:
+    def test_single_image_edit_payload(self) -> None:
+        form = V1ImagesEditsForm.model_validate(
+            {"model": "gpt-image-1", "prompt": "make it green", "size": "1024x1024"}
+        )
+        png_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
+        responses = images_service.images_edit_to_responses_request(
+            form,
+            host_model="gpt-5.5",
+            images=[(png_bytes, "image/png")],
+            mask=None,
+        )
+        # Exactly one input message containing the prompt and one input_image
+        # data URL.
+        assert len(cast(list[JsonValue], responses.input)) == 1
+        content = _content_list(_input_msg(responses))
+        assert content[0] == {"type": "input_text", "text": "make it green"}
+        image_part = _as_mapping(content[1])
+        assert image_part["type"] == "input_image"
+        image_url = cast(str, image_part["image_url"])
+        assert image_url.startswith("data:image/png;base64,")
+        decoded = base64.b64decode(image_url.split(",", 1)[1])
+        assert decoded == png_bytes
+
+    def test_mask_is_appended_with_hint_in_prompt(self) -> None:
+        form = V1ImagesEditsForm.model_validate({"model": "gpt-image-1", "prompt": "edit this", "size": "1024x1024"})
+        responses = images_service.images_edit_to_responses_request(
+            form,
+            host_model="gpt-5.5",
+            images=[(b"image-bytes", "image/png")],
+            mask=(b"mask-bytes", "image/png"),
+        )
+        content = _content_list(_input_msg(responses))
+        # Prompt picks up the mask hint.
+        first_part = _as_mapping(content[0])
+        assert first_part["type"] == "input_text"
+        text_value = cast(str, first_part["text"])
+        assert "edit this" in text_value
+        assert "mask" in text_value.lower()
+        # Two input_image parts: source + mask.
+        image_parts = [
+            part for part in (cast(Mapping[str, JsonValue], p) for p in content) if part.get("type") == "input_image"
+        ]
+        assert len(image_parts) == 2
+
+    def test_no_images_raises(self) -> None:
+        form = V1ImagesEditsForm.model_validate({"model": "gpt-image-1", "prompt": "edit"})
+        with pytest.raises(ValueError):
+            images_service.images_edit_to_responses_request(
+                form,
+                host_model="gpt-5.5",
+                images=[],
+                mask=None,
+            )
+
+    def test_input_fidelity_passes_through_to_tool(self) -> None:
+        form = V1ImagesEditsForm.model_validate(
+            {
+                "model": "gpt-image-1",
+                "prompt": "edit",
+                "size": "1024x1024",
+                "input_fidelity": "high",
+            }
+        )
+        responses = images_service.images_edit_to_responses_request(
+            form,
+            host_model="gpt-5.5",
+            images=[(b"data", "image/png")],
+            mask=None,
+        )
+        assert _tool(responses)["input_fidelity"] == "high"
+
+
 class TestValidateGenerationsPayload:
     def test_omitted_model_resolves_to_configured_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("CODEX_LB_IMAGES_DEFAULT_MODEL", "gpt-image-1")
@@ -179,3 +257,34 @@ class TestValidateGenerationsPayload:
             assert excinfo.value.param == "model"
         finally:
             images_service.get_settings.cache_clear()
+
+
+class TestValidateEditsPayload:
+    def test_omitted_model_resolves_to_configured_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("CODEX_LB_IMAGES_DEFAULT_MODEL", "gpt-image-1")
+        images_service.get_settings.cache_clear()
+        try:
+            payload = V1ImagesEditsForm.model_validate({"prompt": "edit default"})
+
+            validated = images_service.validate_edits_payload(payload)
+
+            assert validated.model == "gpt-image-1"
+        finally:
+            images_service.get_settings.cache_clear()
+
+    def test_allows_legacy_edit_input_fidelity(self) -> None:
+        payload = V1ImagesEditsForm.model_validate(
+            {"model": "gpt-image-1", "prompt": "edit", "size": "1024x1024", "input_fidelity": "high"}
+        )
+
+        validated = images_service.validate_edits_payload(payload)
+
+        assert validated.input_fidelity == "high"
+
+    def test_rejects_gpt_image_2_input_fidelity(self) -> None:
+        payload = V1ImagesEditsForm.model_validate({"model": "gpt-image-2", "prompt": "bad", "input_fidelity": "high"})
+
+        with pytest.raises(ClientPayloadError) as excinfo:
+            images_service.validate_edits_payload(payload)
+
+        assert excinfo.value.param == "input_fidelity"
