@@ -14,18 +14,25 @@ from __future__ import annotations
 
 import base64
 import logging
-from typing import Final
+import time
+from collections.abc import Mapping
+from typing import Final, cast
 
 from app.core.config.settings import get_settings
+from app.core.errors import OpenAIErrorEnvelope, openai_error
 from app.core.openai.exceptions import ClientPayloadError
 from app.core.openai.images import (
+    V1ImageData,
+    V1ImageResponse,
     V1ImagesEditsForm,
     V1ImagesGenerationsRequest,
+    V1ImageUsage,
     is_supported_image_model,
     validate_image_request_parameters,
 )
 from app.core.openai.requests import ResponsesRequest
 from app.core.types import JsonValue
+from app.core.utils.json_guards import is_json_mapping
 
 logger = logging.getLogger(__name__)
 
@@ -321,3 +328,146 @@ def validate_edits_payload(payload: V1ImagesEditsForm) -> V1ImagesEditsForm:
     if payload.model != resolved_model:
         return payload.model_copy(update={"model": resolved_model})
     return payload
+
+
+# ---------------------------------------------------------------------------
+# Non-streaming response translation
+# ---------------------------------------------------------------------------
+
+
+def _select_image_items(output: list[JsonValue]) -> list[Mapping[str, JsonValue]]:
+    items: list[Mapping[str, JsonValue]] = []
+    for entry in output:
+        if not is_json_mapping(entry):
+            continue
+        if entry.get("type") == "image_generation_call":
+            items.append(entry)
+    return items
+
+
+def _coerce_int(value: JsonValue | None) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    return None
+
+
+_USAGE_TOKEN_FIELDS: Final[frozenset[str]] = frozenset({"input_tokens", "output_tokens", "total_tokens"})
+
+
+def _extract_image_usage(response: Mapping[str, JsonValue]) -> V1ImageUsage | None:
+    tool_usage = response.get("tool_usage")
+    if not is_json_mapping(tool_usage):
+        return None
+    image_usage = tool_usage.get("image_gen")
+    if not is_json_mapping(image_usage):
+        return None
+    input_tokens = _coerce_int(image_usage.get("input_tokens"))
+    output_tokens = _coerce_int(image_usage.get("output_tokens"))
+    total_tokens = _coerce_int(image_usage.get("total_tokens"))
+    if total_tokens is None and input_tokens is not None and output_tokens is not None:
+        total_tokens = input_tokens + output_tokens
+    input_details_raw = image_usage.get("input_tokens_details")
+    output_details_raw = image_usage.get("output_tokens_details")
+    input_details = dict(input_details_raw) if is_json_mapping(input_details_raw) else None
+    output_details = dict(output_details_raw) if is_json_mapping(output_details_raw) else None
+    # Forward any other usage detail keys upstream may add (e.g. cached
+    # token counters) so the public response keeps the OpenAI Images
+    # usage shape rather than silently dropping new fields.
+    extra_usage: dict[str, JsonValue] = {}
+    for key, value in image_usage.items():
+        if key in _USAGE_TOKEN_FIELDS:
+            continue
+        if key in ("input_tokens_details", "output_tokens_details"):
+            continue
+        extra_usage[key] = value
+    if (
+        input_tokens is None
+        and output_tokens is None
+        and total_tokens is None
+        and input_details is None
+        and output_details is None
+        and not extra_usage
+    ):
+        return None
+    return V1ImageUsage(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_tokens=total_tokens,
+        input_tokens_details=input_details,
+        output_tokens_details=output_details,
+        **extra_usage,
+    )
+
+
+def images_response_from_responses(response: Mapping[str, JsonValue]) -> V1ImageResponse | OpenAIErrorEnvelope:
+    """Build the public Images response from a completed Responses payload.
+
+    Returns an :class:`OpenAIErrorEnvelope` (TypedDict) when the upstream
+    response indicates the image generation failed; otherwise returns a
+    :class:`V1ImageResponse`.
+    """
+    output_value = response.get("output")
+    if not isinstance(output_value, list):
+        return openai_error(
+            "image_generation_failed",
+            "Upstream response did not include an output array",
+            error_type="server_error",
+        )
+    items = _select_image_items(cast(list[JsonValue], output_value))
+    if not items:
+        return openai_error(
+            "image_generation_failed",
+            "Upstream response did not include any image_generation_call items",
+            error_type="server_error",
+        )
+
+    # Surface the first failed image_generation_call as an error envelope.
+    for item in items:
+        status = item.get("status")
+        if isinstance(status, str) and status == "failed":
+            error = item.get("error")
+            if is_json_mapping(error):
+                message = error.get("message")
+                code = error.get("code")
+                error_type = error.get("type")
+                return openai_error(
+                    code if isinstance(code, str) and code else "image_generation_failed",
+                    message if isinstance(message, str) and message else "Image generation failed",
+                    error_type=error_type if isinstance(error_type, str) and error_type else "server_error",
+                )
+            return openai_error(
+                "image_generation_failed",
+                "Upstream image_generation_call reported status=failed",
+                error_type="server_error",
+            )
+
+    data_entries: list[V1ImageData] = []
+    for item in items:
+        result = item.get("result")
+        if not isinstance(result, str) or not result:
+            continue
+        revised_prompt = item.get("revised_prompt")
+        data_entries.append(
+            V1ImageData(
+                b64_json=result,
+                revised_prompt=revised_prompt if isinstance(revised_prompt, str) and revised_prompt else None,
+            )
+        )
+
+    if not data_entries:
+        return openai_error(
+            "image_generation_failed",
+            "Upstream image_generation_call items contained no image data",
+            error_type="server_error",
+        )
+
+    usage = _extract_image_usage(response)
+    return V1ImageResponse(
+        created=int(time.time()),
+        data=data_entries,
+        usage=usage,
+    )

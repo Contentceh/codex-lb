@@ -9,7 +9,7 @@ from typing import Any, cast
 import pytest
 
 from app.core.openai.exceptions import ClientPayloadError
-from app.core.openai.images import V1ImagesEditsForm, V1ImagesGenerationsRequest
+from app.core.openai.images import V1ImageResponse, V1ImagesEditsForm, V1ImagesGenerationsRequest
 from app.core.types import JsonValue
 from app.modules.proxy import images_service
 
@@ -31,6 +31,12 @@ def _content_list(message: Mapping[str, JsonValue]) -> list[JsonValue]:
 
 def _as_mapping(value: Any) -> Mapping[str, JsonValue]:
     return cast(Mapping[str, JsonValue], value)
+
+
+def _image_response(result: Any) -> V1ImageResponse:
+    """Narrow ``images_response_from_responses`` to ``V1ImageResponse`` for tests."""
+    assert isinstance(result, V1ImageResponse)
+    return result
 
 
 class TestImagesGenerationToResponsesRequest:
@@ -288,3 +294,151 @@ class TestValidateEditsPayload:
             images_service.validate_edits_payload(payload)
 
         assert excinfo.value.param == "input_fidelity"
+
+
+class TestImagesResponseFromResponses:
+    def test_single_image_extracted(self) -> None:
+        upstream = {
+            "id": "resp_abc",
+            "status": "completed",
+            "output": [
+                {
+                    "type": "image_generation_call",
+                    "id": "ig_1",
+                    "status": "completed",
+                    "result": "BASE64DATA==",
+                    "revised_prompt": "a tiny red circle on white",
+                    "size": "1024x1024",
+                    "quality": "low",
+                    "background": "auto",
+                    "output_format": "png",
+                }
+            ],
+            "tool_usage": {"image_gen": {"input_tokens": 12, "output_tokens": 84}},
+        }
+
+        result = images_service.images_response_from_responses(_as_mapping(upstream))
+
+        response = _image_response(result)
+        assert len(response.data) == 1
+        assert response.data[0].b64_json == "BASE64DATA=="
+        assert response.data[0].revised_prompt == "a tiny red circle on white"
+        assert response.usage is not None
+        assert response.usage.input_tokens == 12
+        assert response.usage.output_tokens == 84
+        assert response.usage.total_tokens == 96
+
+    def test_multiple_images_in_output(self) -> None:
+        upstream = {
+            "status": "completed",
+            "output": [
+                {"type": "reasoning", "summary": "thinking"},
+                {
+                    "type": "image_generation_call",
+                    "status": "completed",
+                    "result": "AAAA",
+                },
+                {
+                    "type": "image_generation_call",
+                    "status": "completed",
+                    "result": "BBBB",
+                    "revised_prompt": "second image",
+                },
+                {"type": "message", "role": "assistant", "content": []},
+            ],
+        }
+
+        result = images_service.images_response_from_responses(_as_mapping(upstream))
+
+        response = _image_response(result)
+        assert [d.b64_json for d in response.data] == ["AAAA", "BBBB"]
+        assert response.data[0].revised_prompt is None
+        assert response.data[1].revised_prompt == "second image"
+
+    def test_failed_image_returns_error_envelope(self) -> None:
+        upstream = {
+            "status": "completed",
+            "output": [
+                {
+                    "type": "image_generation_call",
+                    "status": "failed",
+                    "error": {
+                        "code": "content_policy_violation",
+                        "message": "not allowed",
+                        "type": "invalid_request_error",
+                    },
+                }
+            ],
+        }
+
+        result = images_service.images_response_from_responses(_as_mapping(upstream))
+
+        assert isinstance(result, dict)
+        assert result["error"]["code"] == "content_policy_violation"
+        assert result["error"]["message"] == "not allowed"
+        assert result["error"]["type"] == "invalid_request_error"
+
+    def test_no_image_items_returns_error(self) -> None:
+        upstream = {"status": "completed", "output": []}
+
+        result = images_service.images_response_from_responses(_as_mapping(upstream))
+
+        assert isinstance(result, dict)
+        assert result["error"]["code"] == "image_generation_failed"
+
+    def test_empty_result_returns_error(self) -> None:
+        upstream = {
+            "status": "completed",
+            "output": [{"type": "image_generation_call", "status": "completed", "result": ""}],
+        }
+
+        result = images_service.images_response_from_responses(_as_mapping(upstream))
+
+        assert isinstance(result, dict)
+        assert result["error"]["code"] == "image_generation_failed"
+
+    def test_missing_output_returns_error(self) -> None:
+        upstream = {"status": "completed"}
+
+        result = images_service.images_response_from_responses(_as_mapping(upstream))
+
+        assert isinstance(result, dict)
+        assert result["error"]["code"] == "image_generation_failed"
+
+    def test_partial_usage_falls_through(self) -> None:
+        upstream = {
+            "status": "completed",
+            "output": [{"type": "image_generation_call", "status": "completed", "result": "AA"}],
+            "tool_usage": {"image_gen": {"input_tokens": 5}},
+        }
+
+        result = images_service.images_response_from_responses(_as_mapping(upstream))
+
+        response = _image_response(result)
+        assert response.usage is not None
+        assert response.usage.input_tokens == 5
+        assert response.usage.output_tokens is None
+        assert response.usage.total_tokens is None
+
+    def test_usage_forwards_nested_details_and_future_fields(self) -> None:
+        upstream = {
+            "status": "completed",
+            "output": [{"type": "image_generation_call", "status": "completed", "result": "AA"}],
+            "tool_usage": {
+                "image_gen": {
+                    "input_tokens": 5,
+                    "output_tokens": 7,
+                    "input_tokens_details": {"cached_tokens": 2},
+                    "future_counter": 99,
+                }
+            },
+        }
+
+        result = images_service.images_response_from_responses(_as_mapping(upstream))
+
+        response = _image_response(result)
+        assert response.usage is not None
+        dumped = response.usage.model_dump(mode="json", exclude_none=True)
+        assert dumped["total_tokens"] == 12
+        assert dumped["input_tokens_details"] == {"cached_tokens": 2}
+        assert dumped["future_counter"] == 99
