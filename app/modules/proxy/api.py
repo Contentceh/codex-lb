@@ -31,6 +31,7 @@ from app.core.middleware.api_firewall import _parse_trusted_proxy_networks, reso
 from app.core.openai.chat_requests import ChatCompletionsRequest
 from app.core.openai.chat_responses import ChatCompletionResult, collect_chat_completion, stream_chat_chunks
 from app.core.openai.exceptions import ClientPayloadError
+from app.core.openai.images import V1ImageResponse, V1ImagesGenerationsRequest
 from app.core.openai.model_registry import UpstreamModel, get_model_registry, is_public_model
 from app.core.openai.models import (
     CompactResponseResult,
@@ -68,6 +69,13 @@ from app.modules.firewall.service import FirewallRepositoryPort, FirewallService
 from app.modules.proxy import service as proxy_service_module
 from app.modules.proxy.helpers import _rate_limit_details
 from app.modules.proxy.http_bridge_forwarding import parse_forwarded_request
+from app.modules.proxy.images_service import (
+    collect_responses_stream_for_images,
+    images_generation_to_responses_request,
+    images_response_from_responses,
+    translate_responses_stream_to_images_stream,
+    validate_generations_payload,
+)
 from app.modules.proxy.request_policy import (
     apply_api_key_enforcement,
     enforce_strict_text_format,
@@ -251,6 +259,90 @@ async def v1_responses(
         codex_session_affinity=False,
         openai_cache_affinity=True,
         prefer_http_bridge=True,
+    )
+
+
+@v1_router.post(
+    "/images/generations",
+    response_model=V1ImageResponse,
+    responses={
+        200: {
+            "content": {
+                "text/event-stream": {
+                    "schema": {"type": "string"},
+                }
+            }
+        }
+    },
+)
+async def v1_images_generations(
+    request: Request,
+    payload: V1ImagesGenerationsRequest = Body(...),
+    context: ProxyContext = Depends(get_proxy_context),
+    api_key: ApiKeyData | None = Security(validate_proxy_api_key),
+) -> Response:
+    rate_limit_headers = await context.service.rate_limit_headers()
+    try:
+        image_payload = validate_generations_payload(payload)
+    except ClientPayloadError as exc:
+        error = openai_client_payload_error(exc)
+        return _logged_error_json_response(request, 400, error, headers=rate_limit_headers)
+    except ValidationError as exc:
+        error = openai_validation_error(exc)
+        return _logged_error_json_response(request, 400, error, headers=rate_limit_headers)
+
+    assert image_payload.model is not None
+    validate_model_access(api_key, image_payload.model)
+    reservation = await _enforce_request_limits(
+        api_key,
+        request_model=image_payload.model,
+        request_service_tier=None,
+    )
+
+    responses_payload = images_generation_to_responses_request(
+        image_payload,
+        host_model=get_settings().images_host_model,
+    )
+    captured: dict[str, object] = {}
+    stream = context.service.stream_responses(
+        responses_payload,
+        request.headers,
+        codex_session_affinity=False,
+        propagate_http_errors=True,
+        openai_cache_affinity=True,
+        api_key=api_key,
+        api_key_reservation=reservation,
+    )
+
+    if image_payload.stream:
+        image_stream = translate_responses_stream_to_images_stream(stream, captured=captured)
+        return StreamingResponse(
+            image_stream,
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", **rate_limit_headers},
+        )
+
+    try:
+        responses_output, terminal_error = await collect_responses_stream_for_images(stream, captured=captured)
+    except ProxyResponseError as exc:
+        await _release_reservation(reservation)
+        error = _parse_error_envelope(exc.payload)
+        return _logged_error_json_response(
+            request,
+            exc.status_code,
+            error.model_dump(mode="json", exclude_none=True),
+            headers=rate_limit_headers,
+        )
+
+    if terminal_error is not None:
+        return _logged_error_json_response(request, 502, terminal_error, headers=rate_limit_headers)
+    assert responses_output is not None
+    image_result = images_response_from_responses(responses_output)
+    if isinstance(image_result, dict):
+        return _logged_error_json_response(request, 502, image_result, headers=rate_limit_headers)
+    return JSONResponse(
+        content=image_result.model_dump(mode="json", exclude_none=True),
+        headers=rate_limit_headers,
     )
 
 
