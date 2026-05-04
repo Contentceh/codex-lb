@@ -5,6 +5,8 @@ from __future__ import annotations
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
+from app.core.config.settings import Settings
+from app.core.openai.exceptions import ClientPayloadError
 from app.core.openai.images import (
     V1ImageCompletedEvent,
     V1ImageData,
@@ -16,6 +18,8 @@ from app.core.openai.images import (
     V1ImageStreamEvent,
     V1ImageUsage,
     is_supported_image_model,
+    validate_image_request_parameters,
+    validate_image_size,
 )
 
 
@@ -268,3 +272,150 @@ class TestIsSupportedImageModel:
     @pytest.mark.parametrize("model", ["gpt-5.2", "gpt-5.4", "gpt-image-3", "dall-e-3", "image-2", ""])
     def test_unsupported_models(self, model: str) -> None:
         assert is_supported_image_model(model) is False
+
+
+class TestImageSettingsDefaults:
+    def test_images_settings_have_safe_defaults(self) -> None:
+        settings = Settings()
+
+        assert settings.images_host_model == "gpt-5.5"
+        assert settings.images_default_model == "gpt-image-2"
+        assert settings.images_max_partial_images == 3
+        assert not hasattr(settings, "images_max_n")
+
+    def test_images_max_partial_images_can_be_lowered_but_not_raised_above_stream_contract(self) -> None:
+        assert Settings(images_max_partial_images=0).images_max_partial_images == 0
+
+        with pytest.raises(ValidationError):
+            Settings(images_max_partial_images=4)
+
+
+def _validate_default(**overrides: object) -> None:
+    kwargs: dict[str, object] = {
+        "model": "gpt-image-2",
+        "quality": "auto",
+        "size": "auto",
+        "background": "auto",
+        "output_format": "png",
+        "moderation": "auto",
+        "input_fidelity": None,
+        "is_edit": False,
+        "n": 1,
+        "partial_images": None,
+        "output_compression": 100,
+        "images_max_partial_images": 3,
+    }
+    kwargs.update(overrides)
+    validate_image_request_parameters(**kwargs)  # type: ignore[arg-type]
+
+
+class TestValidateImageSize:
+    @pytest.mark.parametrize("size", ["auto", "1024x1024", "2048x2048", "3072x1024"])
+    def test_gpt_image_2_accepts_safe_sizes(self, size: str) -> None:
+        validate_image_size("gpt-image-2", size)
+
+    @pytest.mark.parametrize("size", ["1024", "1024x1024 ", "1024x1000", "4096x1024", "4096x1536", "320x320"])
+    def test_gpt_image_2_rejects_invalid_sizes(self, size: str) -> None:
+        with pytest.raises(ClientPayloadError) as excinfo:
+            validate_image_size("gpt-image-2", size)
+        assert excinfo.value.param == "size"
+
+    @pytest.mark.parametrize("size", ["auto", "1024x1024", "1536x1024", "1024x1536"])
+    def test_legacy_fixed_sizes_allowed(self, size: str) -> None:
+        validate_image_size("gpt-image-1", size)
+        validate_image_size("gpt-image-1.5", size)
+        validate_image_size("gpt-image-1-mini", size)
+
+    @pytest.mark.parametrize("size", ["1280x720", "2048x2048", "1024x1024 ", "garbage"])
+    def test_legacy_other_sizes_rejected(self, size: str) -> None:
+        with pytest.raises(ClientPayloadError) as excinfo:
+            validate_image_size("gpt-image-1", size)
+        assert excinfo.value.param == "size"
+
+
+class TestValidateImageRequestParameters:
+    def test_default_request_is_valid(self) -> None:
+        _validate_default()
+
+    def test_unsupported_model_param_is_model(self) -> None:
+        with pytest.raises(ClientPayloadError) as excinfo:
+            _validate_default(model="gpt-5.2")
+        assert excinfo.value.param == "model"
+        assert excinfo.value.code == "invalid_request_error"
+        assert excinfo.value.error_type == "invalid_request_error"
+
+    @pytest.mark.parametrize("n", [0, 2, 5])
+    def test_n_other_than_one_is_rejected_without_fan_out_knob(self, n: int) -> None:
+        with pytest.raises(ClientPayloadError) as excinfo:
+            _validate_default(n=n)
+        assert excinfo.value.param == "n"
+
+    @pytest.mark.parametrize("partial", [0, 1, 3])
+    def test_partial_images_within_configured_cap_allowed(self, partial: int) -> None:
+        _validate_default(partial_images=partial)
+
+    @pytest.mark.parametrize("partial", [-1, 4])
+    def test_partial_images_outside_configured_cap_rejected(self, partial: int) -> None:
+        with pytest.raises(ClientPayloadError) as excinfo:
+            _validate_default(partial_images=partial)
+        assert excinfo.value.param == "partial_images"
+
+    def test_configured_partial_images_cap_is_honored(self) -> None:
+        with pytest.raises(ClientPayloadError) as excinfo:
+            _validate_default(partial_images=2, images_max_partial_images=1)
+        assert excinfo.value.param == "partial_images"
+
+    @pytest.mark.parametrize("background", ["transparent", "plaid"])
+    def test_gpt_image_2_rejects_transparent_or_unknown_background(self, background: str) -> None:
+        with pytest.raises(ClientPayloadError) as excinfo:
+            _validate_default(background=background)
+        assert excinfo.value.param == "background"
+
+    def test_gpt_image_2_rejects_input_fidelity_even_on_edits(self) -> None:
+        with pytest.raises(ClientPayloadError) as excinfo:
+            _validate_default(input_fidelity="high", is_edit=True)
+        assert excinfo.value.param == "input_fidelity"
+
+    @pytest.mark.parametrize("quality", ["low", "medium", "high", "auto"])
+    def test_gpt_image_2_quality_accepts(self, quality: str) -> None:
+        _validate_default(quality=quality)
+
+    @pytest.mark.parametrize("quality", ["standard", "hd", "max"])
+    def test_gpt_image_2_quality_rejects(self, quality: str) -> None:
+        with pytest.raises(ClientPayloadError) as excinfo:
+            _validate_default(quality=quality)
+        assert excinfo.value.param == "quality"
+
+    def test_legacy_input_fidelity_rejected_on_generations(self) -> None:
+        with pytest.raises(ClientPayloadError) as excinfo:
+            _validate_default(model="gpt-image-1", input_fidelity="high", is_edit=False, size="1024x1024")
+        assert excinfo.value.param == "input_fidelity"
+
+    def test_legacy_input_fidelity_allowed_on_edits(self) -> None:
+        _validate_default(model="gpt-image-1", input_fidelity="high", is_edit=True, size="1024x1024")
+        _validate_default(model="gpt-image-1.5", input_fidelity="low", is_edit=True, size="1024x1024")
+
+    def test_input_fidelity_rejected_on_gpt_image_1_mini_edits(self) -> None:
+        with pytest.raises(ClientPayloadError) as excinfo:
+            _validate_default(model="gpt-image-1-mini", input_fidelity="high", is_edit=True, size="1024x1024")
+        assert excinfo.value.param == "input_fidelity"
+
+    @pytest.mark.parametrize("output_format", ["png", "jpeg", "webp"])
+    def test_output_format_allowed(self, output_format: str) -> None:
+        _validate_default(output_format=output_format)
+
+    def test_output_format_rejected(self) -> None:
+        with pytest.raises(ClientPayloadError) as excinfo:
+            _validate_default(output_format="bmp")
+        assert excinfo.value.param == "output_format"
+
+    @pytest.mark.parametrize("compression", [-1, 101])
+    def test_output_compression_bounds_reject_invalid_values(self, compression: int) -> None:
+        with pytest.raises(ClientPayloadError) as excinfo:
+            _validate_default(output_compression=compression)
+        assert excinfo.value.param == "output_compression"
+
+    def test_moderation_rejected(self) -> None:
+        with pytest.raises(ClientPayloadError) as excinfo:
+            _validate_default(moderation="strict")
+        assert excinfo.value.param == "moderation"

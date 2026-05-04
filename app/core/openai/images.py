@@ -13,19 +13,37 @@ from typing import Final, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.core.openai.exceptions import ClientPayloadError
 from app.core.types import JsonValue
 
 GPT_IMAGE_MODEL_PREFIX: Final[str] = "gpt-image-"
-SUPPORTED_IMAGE_MODELS: Final[frozenset[str]] = frozenset(
-    {"gpt-image-2", "gpt-image-1.5", "gpt-image-1", "gpt-image-1-mini"}
-)
+GPT_IMAGE_2_MODELS: Final[frozenset[str]] = frozenset({"gpt-image-2"})
+LEGACY_GPT_IMAGE_MODELS: Final[frozenset[str]] = frozenset({"gpt-image-1.5", "gpt-image-1", "gpt-image-1-mini"})
+SUPPORTED_IMAGE_MODELS: Final[frozenset[str]] = GPT_IMAGE_2_MODELS | LEGACY_GPT_IMAGE_MODELS
 
-_QUALITY_VALUES: Final[frozenset[str]] = frozenset({"low", "medium", "high", "auto"})
-_BACKGROUND_VALUES: Final[frozenset[str]] = frozenset({"transparent", "opaque", "auto"})
-_OUTPUT_FORMATS: Final[frozenset[str]] = frozenset({"png", "jpeg", "webp"})
-_MODERATION_VALUES: Final[frozenset[str]] = frozenset({"auto", "low"})
-_INPUT_FIDELITY_VALUES: Final[frozenset[str]] = frozenset({"low", "high"})
-_SIZE_PATTERN: Final[re.Pattern[str]] = re.compile(r"^\d+x\d+$")
+GPT_IMAGE_2_QUALITY_VALUES: Final[frozenset[str]] = frozenset({"low", "medium", "high", "auto"})
+LEGACY_QUALITY_VALUES: Final[frozenset[str]] = frozenset({"low", "medium", "high", "auto"})
+BACKGROUND_VALUES: Final[frozenset[str]] = frozenset({"transparent", "opaque", "auto"})
+OUTPUT_FORMATS: Final[frozenset[str]] = frozenset({"png", "jpeg", "webp"})
+MODERATION_VALUES: Final[frozenset[str]] = frozenset({"auto", "low"})
+INPUT_FIDELITY_VALUES: Final[frozenset[str]] = frozenset({"low", "high"})
+INPUT_FIDELITY_SUPPORTED_MODELS: Final[frozenset[str]] = frozenset({"gpt-image-1.5", "gpt-image-1"})
+LEGACY_FIXED_SIZES: Final[frozenset[str]] = frozenset({"1024x1024", "1536x1024", "1024x1536", "auto"})
+GPT_IMAGE_2_MAX_EDGE: Final[int] = 3840
+GPT_IMAGE_2_MIN_PIXELS: Final[int] = 655_360
+GPT_IMAGE_2_MAX_PIXELS: Final[int] = 8_294_400
+GPT_IMAGE_2_RATIO_MAX: Final[float] = 3.0
+GPT_IMAGE_2_DIM_MULTIPLE: Final[int] = 16
+_SIZE_PATTERN: Final[re.Pattern[str]] = re.compile(r"^(\d+)x(\d+)$")
+
+
+def _images_invalid(
+    message: str,
+    *,
+    param: str | None = None,
+    code: str = "invalid_request_error",
+) -> ClientPayloadError:
+    return ClientPayloadError(message, param=param, code=code, error_type="invalid_request_error")
 
 
 def is_supported_image_model(model: str) -> bool:
@@ -52,6 +70,130 @@ def _validate_in(value: str, allowed: frozenset[str], field_name: str) -> str:
         return value
     expected = ", ".join(sorted(allowed))
     raise ValueError(f"{field_name} must be one of: {expected}")
+
+
+def validate_image_size(model: str, size: str) -> None:
+    """Validate the public Images ``size`` parameter for a supported model."""
+    if size == "auto":
+        return
+    match = _SIZE_PATTERN.match(size)
+    if match is None:
+        raise _images_invalid(f"Invalid size '{size}'. Expected 'auto' or 'WIDTHxHEIGHT'.", param="size")
+
+    width = int(match.group(1))
+    height = int(match.group(2))
+    if model in GPT_IMAGE_2_MODELS:
+        _validate_gpt_image_2_size(width, height)
+        return
+
+    if size not in LEGACY_FIXED_SIZES:
+        raise _images_invalid(
+            f"Invalid size '{size}' for model '{model}'. Allowed sizes: 1024x1024, 1536x1024, 1024x1536, auto.",
+            param="size",
+        )
+
+
+def _validate_gpt_image_2_size(width: int, height: int) -> None:
+    if width <= 0 or height <= 0:
+        raise _images_invalid("size dimensions must be positive integers", param="size")
+    if width % GPT_IMAGE_2_DIM_MULTIPLE != 0 or height % GPT_IMAGE_2_DIM_MULTIPLE != 0:
+        raise _images_invalid(
+            f"size dimensions must be multiples of {GPT_IMAGE_2_DIM_MULTIPLE} for gpt-image-2",
+            param="size",
+        )
+    if max(width, height) > GPT_IMAGE_2_MAX_EDGE:
+        raise _images_invalid(f"size edges must be <= {GPT_IMAGE_2_MAX_EDGE} px for gpt-image-2", param="size")
+
+    long_edge = max(width, height)
+    short_edge = min(width, height)
+    if short_edge == 0 or long_edge / short_edge > GPT_IMAGE_2_RATIO_MAX:
+        raise _images_invalid(
+            f"size aspect ratio must be at most {int(GPT_IMAGE_2_RATIO_MAX)}:1 for gpt-image-2",
+            param="size",
+        )
+
+    pixels = width * height
+    if pixels < GPT_IMAGE_2_MIN_PIXELS or pixels > GPT_IMAGE_2_MAX_PIXELS:
+        raise _images_invalid(
+            f"size total pixels must be between {GPT_IMAGE_2_MIN_PIXELS} and {GPT_IMAGE_2_MAX_PIXELS} for gpt-image-2",
+            param="size",
+        )
+
+
+def validate_image_request_parameters(
+    *,
+    model: str,
+    quality: str,
+    size: str,
+    background: str,
+    output_format: str,
+    moderation: str,
+    input_fidelity: str | None,
+    is_edit: bool,
+    n: int,
+    partial_images: int | None,
+    output_compression: int,
+    images_max_partial_images: int,
+) -> None:
+    """Apply cross-field Images API validation before opening upstream calls."""
+    if not is_supported_image_model(model):
+        raise _images_invalid(f"Unsupported image model '{model}'. Use a 'gpt-image-*' model.", param="model")
+
+    # ``n`` is hard-capped at 1 until codex-lb implements client-side fan-out.
+    # Do not expose an operator knob that promises multiple images without that
+    # translation layer; accepting ``n > 1`` today would silently under-deliver.
+    if n < 1 or n > 1:
+        raise _images_invalid(
+            "n must be 1; multiple images per request are not supported by the upstream image_generation tool yet. "
+            "Issue the request multiple times to get more images.",
+            param="n",
+        )
+
+    if background not in BACKGROUND_VALUES:
+        raise _images_invalid(
+            f"Invalid background '{background}'. Expected one of: " + ", ".join(sorted(BACKGROUND_VALUES)),
+            param="background",
+        )
+    if output_format not in OUTPUT_FORMATS:
+        raise _images_invalid(
+            f"Invalid output_format '{output_format}'. Expected one of: png, jpeg, webp.",
+            param="output_format",
+        )
+    if not 0 <= output_compression <= 100:
+        raise _images_invalid("output_compression must be between 0 and 100", param="output_compression")
+    if moderation not in MODERATION_VALUES:
+        raise _images_invalid(f"Invalid moderation '{moderation}'. Expected one of: auto, low.", param="moderation")
+    if partial_images is not None and (partial_images < 0 or partial_images > images_max_partial_images):
+        raise _images_invalid(
+            f"partial_images must be between 0 and {images_max_partial_images}",
+            param="partial_images",
+        )
+
+    if model in GPT_IMAGE_2_MODELS:
+        if quality not in GPT_IMAGE_2_QUALITY_VALUES:
+            raise _images_invalid(
+                f"Invalid quality '{quality}' for gpt-image-2. Expected one of: low, medium, high, auto.",
+                param="quality",
+            )
+        if background == "transparent":
+            raise _images_invalid("background='transparent' is not supported by gpt-image-2", param="background")
+        if input_fidelity is not None:
+            raise _images_invalid("input_fidelity is not supported by gpt-image-2", param="input_fidelity")
+    else:
+        if quality not in LEGACY_QUALITY_VALUES:
+            raise _images_invalid(f"Invalid quality '{quality}' for model '{model}'.", param="quality")
+        if input_fidelity is not None:
+            if not is_edit:
+                raise _images_invalid("input_fidelity is only supported on /v1/images/edits", param="input_fidelity")
+            if model not in INPUT_FIDELITY_SUPPORTED_MODELS:
+                raise _images_invalid(f"input_fidelity is not supported by {model}", param="input_fidelity")
+            if input_fidelity not in INPUT_FIDELITY_VALUES:
+                raise _images_invalid(
+                    f"Invalid input_fidelity '{input_fidelity}'. Expected one of: low, high.",
+                    param="input_fidelity",
+                )
+
+    validate_image_size(model, size)
 
 
 class V1ImagesGenerationsRequest(BaseModel):
@@ -86,29 +228,29 @@ class V1ImagesGenerationsRequest(BaseModel):
     @field_validator("quality")
     @classmethod
     def _quality_is_known(cls, value: str) -> str:
-        return _validate_in(value, _QUALITY_VALUES, "quality")
+        return _validate_in(value, GPT_IMAGE_2_QUALITY_VALUES, "quality")
 
     @field_validator("background")
     @classmethod
     def _background_is_known(cls, value: str) -> str:
-        return _validate_in(value, _BACKGROUND_VALUES, "background")
+        return _validate_in(value, BACKGROUND_VALUES, "background")
 
     @field_validator("output_format")
     @classmethod
     def _output_format_is_known(cls, value: str) -> str:
-        return _validate_in(value, _OUTPUT_FORMATS, "output_format")
+        return _validate_in(value, OUTPUT_FORMATS, "output_format")
 
     @field_validator("moderation")
     @classmethod
     def _moderation_is_known(cls, value: str) -> str:
-        return _validate_in(value, _MODERATION_VALUES, "moderation")
+        return _validate_in(value, MODERATION_VALUES, "moderation")
 
     @field_validator("input_fidelity")
     @classmethod
     def _input_fidelity_is_known(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        return _validate_in(value, _INPUT_FIDELITY_VALUES, "input_fidelity")
+        return _validate_in(value, INPUT_FIDELITY_VALUES, "input_fidelity")
 
 
 class V1ImagesEditsForm(BaseModel):
@@ -147,29 +289,29 @@ class V1ImagesEditsForm(BaseModel):
     @field_validator("quality")
     @classmethod
     def _quality_is_known(cls, value: str) -> str:
-        return _validate_in(value, _QUALITY_VALUES, "quality")
+        return _validate_in(value, GPT_IMAGE_2_QUALITY_VALUES, "quality")
 
     @field_validator("background")
     @classmethod
     def _background_is_known(cls, value: str) -> str:
-        return _validate_in(value, _BACKGROUND_VALUES, "background")
+        return _validate_in(value, BACKGROUND_VALUES, "background")
 
     @field_validator("output_format")
     @classmethod
     def _output_format_is_known(cls, value: str) -> str:
-        return _validate_in(value, _OUTPUT_FORMATS, "output_format")
+        return _validate_in(value, OUTPUT_FORMATS, "output_format")
 
     @field_validator("moderation")
     @classmethod
     def _moderation_is_known(cls, value: str) -> str:
-        return _validate_in(value, _MODERATION_VALUES, "moderation")
+        return _validate_in(value, MODERATION_VALUES, "moderation")
 
     @field_validator("input_fidelity")
     @classmethod
     def _input_fidelity_is_known(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        return _validate_in(value, _INPUT_FIDELITY_VALUES, "input_fidelity")
+        return _validate_in(value, INPUT_FIDELITY_VALUES, "input_fidelity")
 
 
 # ---------------------------------------------------------------------------
@@ -284,4 +426,6 @@ __all__ = [
     "V1ImagesEditsForm",
     "V1ImagesGenerationsRequest",
     "is_supported_image_model",
+    "validate_image_request_parameters",
+    "validate_image_size",
 ]
