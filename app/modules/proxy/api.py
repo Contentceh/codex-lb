@@ -348,6 +348,16 @@ async def v1_images_generations(
     )
 
 
+@v1_router.post("/images/variations")
+async def v1_images_variations(request: Request) -> JSONResponse:
+    error = openai_error(
+        "not_supported",
+        "The /v1/images/variations endpoint is not supported by this proxy",
+        error_type="invalid_request_error",
+    )
+    return _logged_error_json_response(request, 400, error)
+
+
 @v1_router.post(
     "/images/edits",
     response_model=V1ImageResponse,

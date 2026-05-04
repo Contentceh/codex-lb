@@ -129,6 +129,34 @@ async def test_v1_images_generations_streams_image_events(async_client, monkeypa
 
 
 @pytest.mark.asyncio
+async def test_v1_images_variations_returns_explicit_unsupported_error(async_client, monkeypatch):
+    called = False
+
+    async def fake_stream(payload, headers, access_token, account_id, base_url=None, raise_for_status=False, **kwargs):
+        del payload, headers, access_token, account_id, base_url, raise_for_status, kwargs
+        nonlocal called
+        called = True
+        yield "data: [DONE]\n\n"
+
+    monkeypatch.setattr(proxy_module, "core_stream_responses", fake_stream)
+
+    response = await async_client.post(
+        "/v1/images/variations",
+        files={"image": ("crab.png", b"fake-png", "image/png")},
+        data={"model": "gpt-image-1", "prompt": "vary crab"},
+    )
+
+    assert response.status_code == 400
+    body = response.json()
+    assert body["error"] == {
+        "message": "The /v1/images/variations endpoint is not supported by this proxy",
+        "type": "invalid_request_error",
+        "code": "not_supported",
+    }
+    assert called is False
+
+
+@pytest.mark.asyncio
 async def test_v1_images_edits_returns_openai_images_envelope(async_client, monkeypatch):
     seen: dict[str, object] = {}
     await _import_proxy_account(async_client, account_id="acc_img_edit", email="image-edit@example.com")
