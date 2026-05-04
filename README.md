@@ -508,3 +508,7 @@ Thanks goes to these wonderful people ([emoji key](https://allcontributors.org/d
 <!-- ALL-CONTRIBUTORS-LIST:END -->
 
 This project follows the [all-contributors](https://github.com/all-contributors/all-contributors) specification. Contributions of any kind welcome!
+
+## Health checks
+
+Runtime verification uses the health endpoint order `/health/live` then `/health/ready`. Use `/health/live` for a lightweight process probe and `/health/ready` before authenticated API smoke checks or cutover decisions. The legacy `/health` endpoint remains available for compatibility, but Sprint 1 deployment evidence should prefer the live/ready probes.

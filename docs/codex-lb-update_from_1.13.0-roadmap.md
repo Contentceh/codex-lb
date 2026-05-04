@@ -56,7 +56,7 @@ Exit criteria:
 - Existing Docker data can boot through `/health/live` and `/health/ready` in a controlled smoke run.
 - No PR #498 image API code is included yet.
 
-### [ ] Sprint 2 — Docker cutover and live 1.15.0 compatibility validation
+### [x] Sprint 2 — Docker cutover and live 1.15.0 compatibility validation
 
 Purpose: deploy the 1.15.0 branch on `Debian-n8n` while preserving the current account/settings data and keeping a clean rollback path.
 
@@ -75,6 +75,7 @@ Exit criteria:
 - Existing accounts and dashboard/API settings remain visible and usable.
 - Health endpoints and a minimal authenticated proxy smoke test pass.
 - Rollback instructions and backup location are documented privately outside Git if they contain secrets.
+- Sprint 2 evidence bundle and completion docs commit are recorded.
 
 ### [ ] Sprint 3 — Integrate PR #498 as an isolated image API patch
 
@@ -129,7 +130,7 @@ Exit criteria:
 
 ## First sprint selected
 
-Sprint 1 — Upgrade foundation to upstream `v1.15.0` is completed. The next incomplete sprint is Sprint 2 — Docker cutover and live 1.15.0 compatibility validation.
+Sprint 1 — Upgrade foundation to upstream `v1.15.0` and Sprint 2 — Docker cutover and live 1.15.0 compatibility validation are completed. The next incomplete sprint is Sprint 3 — Integrate PR #498 as an isolated image API patch.
 
 ## Open risks
 

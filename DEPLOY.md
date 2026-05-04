@@ -1,11 +1,12 @@
 # Deploying codex-lb next to n8n-install
 
-This directory is the **codex-lb** application sources. Production runtime uses the published image `ghcr.io/soju06/codex-lb` (same version as previously wired in `n8n-install`).
+This directory is the **codex-lb** application sources. During the Sprint 2 cutover, the observed live runtime is the checked-out source tree started with `docker-compose.yml` and the `server` + `frontend` services only.
 
 ## Layout
 
-- `docker-compose.yml` — upstream dev stack (build + hot reload).
-- `docker-compose.prod.yml` — production: GHCR image, ports **2455** (API) and **1455** (OAuth callback), persistent data in Docker volume `localai_codex-lb-data` (created earlier by the `localai` compose project).
+- `docker-compose.yml` — live Sprint 2 cutover stack: builds `server` and `frontend` locally and mounts the preserved Docker volume `localai_codex-lb-data` at `/var/lib/codex-lb`.
+- `docker-compose.prod.yml` — **non-cutover/stale for Sprint 2**: still points at `ghcr.io/soju06/codex-lb:1.8.1`. Do not deploy it for the 1.15.0 cutover until it is intentionally updated and revalidated.
+- `docker-compose.prod copy.yml` — historical copy with the same stale production image path; do not use for Sprint 2 cutover.
 
 ## Environment
 
@@ -19,10 +20,15 @@ Do not commit `.env`.
 
 ```bash
 cd /home/vgoro/codex-lb
-docker compose -f docker-compose.prod.yml up -d
-docker compose -f docker-compose.prod.yml ps
-curl -fsS http://127.0.0.1:2455/health
+docker compose -f docker-compose.yml up -d server frontend
+docker compose -f docker-compose.yml ps
+curl -fsS http://127.0.0.1:2455/health/live
+echo
+curl -fsS http://127.0.0.1:2455/health/ready
+echo
 ```
+
+Use `/health/live` first to confirm the process is reachable, then `/health/ready` to confirm dependencies and bridge readiness before authenticated API smoke checks.
 
 After changing `n8n-install/Caddyfile`, reload Caddy in the main stack:
 
