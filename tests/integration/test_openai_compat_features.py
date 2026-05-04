@@ -439,7 +439,12 @@ async def test_v1_chat_completions_maps_response_format(async_client, monkeypatc
             "type": "json_schema",
             "json_schema": {
                 "name": "result_schema",
-                "schema": {"type": "object", "properties": {"ok": {"type": "boolean"}}},
+                "schema": {
+                    "type": "object",
+                    "properties": {"ok": {"type": "boolean"}},
+                    "required": ["ok"],
+                    "additionalProperties": False,
+                },
                 "strict": True,
             },
         },
