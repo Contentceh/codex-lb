@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from app.core.openai.images import (
+    V1ImageCompletedEvent,
+    V1ImageData,
+    V1ImageErrorEvent,
+    V1ImagePartialImageEvent,
+    V1ImageResponse,
     V1ImagesEditsForm,
     V1ImagesGenerationsRequest,
+    V1ImageStreamEvent,
+    V1ImageUsage,
     is_supported_image_model,
 )
 
@@ -125,6 +132,129 @@ class TestV1ImagesEditsForm:
     def test_empty_prompt_rejected(self) -> None:
         with pytest.raises(ValidationError):
             V1ImagesEditsForm.model_validate({"model": "gpt-image-1", "prompt": ""})
+
+
+class TestV1ImageResponse:
+    def test_full_response_round_trips(self) -> None:
+        response = V1ImageResponse(
+            created=1_700_000_000,
+            data=[
+                V1ImageData(b64_json="aGVsbG8=", revised_prompt="a red square"),
+                V1ImageData(b64_json="d29ybGQ=", revised_prompt=None),
+            ],
+            usage=V1ImageUsage(input_tokens=10, output_tokens=20, total_tokens=30),
+        )
+
+        dumped = response.model_dump(mode="json", exclude_none=True)
+
+        assert dumped["created"] == 1_700_000_000
+        assert dumped["data"][0] == {"b64_json": "aGVsbG8=", "revised_prompt": "a red square"}
+        assert dumped["data"][1] == {"b64_json": "d29ybGQ="}
+        assert dumped["usage"] == {"input_tokens": 10, "output_tokens": 20, "total_tokens": 30}
+
+    def test_usage_allows_nested_details_and_future_fields(self) -> None:
+        usage = V1ImageUsage.model_validate(
+            {
+                "input_tokens": 5,
+                "output_tokens": 7,
+                "total_tokens": 12,
+                "input_tokens_details": {"text_tokens": 3, "image_tokens": 2},
+                "output_tokens_details": {"image_tokens": 7},
+                "future_counter": 99,
+            }
+        )
+
+        dumped = usage.model_dump(mode="json", exclude_none=True)
+
+        assert dumped["input_tokens_details"] == {"text_tokens": 3, "image_tokens": 2}
+        assert dumped["output_tokens_details"] == {"image_tokens": 7}
+        assert dumped["future_counter"] == 99
+
+
+class TestV1ImageStreamEvents:
+    def test_generation_partial_event_round_trips(self) -> None:
+        event = V1ImagePartialImageEvent.model_validate(
+            {
+                "type": "image_generation.partial_image",
+                "b64_json": "cGFydGlhbA==",
+                "created_at": 1_700_000_001,
+                "partial_image_index": 0,
+                "output_index": 0,
+                "size": "1024x1024",
+                "quality": "high",
+                "background": "opaque",
+                "output_format": "png",
+            }
+        )
+
+        assert event.model_dump(mode="json", exclude_none=True) == {
+            "type": "image_generation.partial_image",
+            "b64_json": "cGFydGlhbA==",
+            "created_at": 1_700_000_001,
+            "partial_image_index": 0,
+            "output_index": 0,
+            "size": "1024x1024",
+            "quality": "high",
+            "background": "opaque",
+            "output_format": "png",
+        }
+
+    def test_edit_completed_event_round_trips_with_usage(self) -> None:
+        event = V1ImageCompletedEvent(
+            type="image_edit.completed",
+            b64_json="ZmluYWw=",
+            created_at=1_700_000_002,
+            revised_prompt="more saturated",
+            usage=V1ImageUsage(input_tokens=11, output_tokens=13, total_tokens=24),
+        )
+
+        dumped = event.model_dump(mode="json", exclude_none=True)
+
+        assert dumped == {
+            "type": "image_edit.completed",
+            "b64_json": "ZmluYWw=",
+            "created_at": 1_700_000_002,
+            "revised_prompt": "more saturated",
+            "usage": {"input_tokens": 11, "output_tokens": 13, "total_tokens": 24},
+        }
+
+    def test_stream_error_event_round_trips(self) -> None:
+        event = V1ImageErrorEvent.model_validate(
+            {
+                "type": "error",
+                "error": {
+                    "message": "Image generation failed",
+                    "type": "server_error",
+                    "code": "image_generation_failed",
+                    "param": "model",
+                },
+            }
+        )
+
+        assert event.model_dump(mode="json", exclude_none=True) == {
+            "type": "error",
+            "error": {
+                "message": "Image generation failed",
+                "type": "server_error",
+                "code": "image_generation_failed",
+                "param": "model",
+            },
+        }
+
+    def test_stream_event_union_validates_known_events(self) -> None:
+        adapter = TypeAdapter(V1ImageStreamEvent)
+
+        event = adapter.validate_python(
+            {"type": "image_generation.completed", "b64_json": "ZmluYWw=", "created_at": 1_700_000_003}
+        )
+
+        assert isinstance(event, V1ImageCompletedEvent)
+
+    def test_unknown_stream_event_type_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            V1ImagePartialImageEvent.model_validate(
+                {"type": "response.created", "b64_json": "cGFydGlhbA==", "created_at": 1_700_000_004}
+            )
 
 
 class TestIsSupportedImageModel:
