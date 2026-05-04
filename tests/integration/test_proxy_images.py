@@ -7,8 +7,13 @@ import json
 import pytest
 
 import app.modules.proxy.service as proxy_module
+from app.core.auth import generate_unique_account_id
 from app.core.clients.proxy import ProxyResponseError
 from app.core.utils.sse import format_sse_event
+from app.core.utils.time import utcnow
+from app.db.session import SessionLocal
+from app.modules.proxy.rate_limit_cache import get_rate_limit_headers_cache
+from app.modules.usage.repository import UsageRepository
 
 
 def _encode_jwt(payload: dict) -> str:
@@ -31,6 +36,25 @@ def _make_auth_json(account_id: str, email: str) -> dict:
             "accountId": account_id,
         },
     }
+
+
+async def _enable_api_key_auth(async_client) -> None:
+    response = await async_client.put(
+        "/api/settings",
+        json={
+            "stickyThreadsEnabled": False,
+            "preferEarlierResetAccounts": False,
+            "totpRequiredOnLogin": False,
+            "apiKeyAuthEnabled": True,
+        },
+    )
+    assert response.status_code == 200
+
+
+async def _create_proxy_api_key(async_client, *, name: str, **payload) -> str:
+    create = await async_client.post("/api/api-keys/", json={"name": name, **payload})
+    assert create.status_code == 200
+    return create.json()["key"]
 
 
 async def _import_proxy_account(async_client, *, account_id: str, email: str) -> None:
@@ -348,6 +372,123 @@ async def test_v1_images_edits_maps_upstream_http_error(async_client, monkeypatc
 
     assert response.status_code == 429
     assert response.json()["error"]["code"] == "rate_limit_exceeded"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", ["/v1/images/generations", "/v1/images/edits", "/v1/images/variations"])
+async def test_v1_image_routes_require_api_key_when_enabled(async_client, endpoint):
+    await _enable_api_key_auth(async_client)
+    request_kwargs = (
+        {"json": {"model": "gpt-image-2", "prompt": "paint a crab"}}
+        if endpoint == "/v1/images/generations"
+        else {
+            "files": {"image": ("crab.png", b"fake-png", "image/png")},
+            "data": {"model": "gpt-image-1", "prompt": "paint a crab"},
+        }
+    )
+
+    response = await async_client.post(endpoint, **request_kwargs)
+
+    assert response.status_code == 401
+    assert response.json()["error"] == {
+        "message": "Missing API key in Authorization header",
+        "type": "authentication_error",
+        "code": "invalid_api_key",
+    }
+
+
+async def _seed_image_rate_limit_headers(account_id: str, email: str) -> None:
+    expected_account_id = generate_unique_account_id(account_id, email)
+    async with SessionLocal() as session:
+        usage_repo = UsageRepository(session)
+        await usage_repo.add_entry(
+            account_id=expected_account_id,
+            used_percent=42.0,
+            window="primary",
+            reset_at=1735689600,
+            window_minutes=300,
+            recorded_at=utcnow(),
+        )
+    await get_rate_limit_headers_cache().invalidate()
+
+
+@pytest.mark.asyncio
+async def test_v1_images_generations_preserves_rate_limit_headers_on_validation_error(async_client, monkeypatch):
+    await _import_proxy_account(async_client, account_id="acc_img_headers", email="image-headers@example.com")
+    await _seed_image_rate_limit_headers("acc_img_headers", "image-headers@example.com")
+
+    async def fake_stream(payload, headers, access_token, account_id, base_url=None, raise_for_status=False, **kwargs):
+        del payload, headers, access_token, account_id, base_url, raise_for_status, kwargs
+        raise AssertionError("validation errors must not call upstream")
+        yield "data: [DONE]\n\n"
+
+    monkeypatch.setattr(proxy_module, "core_stream_responses", fake_stream)
+
+    response = await async_client.post(
+        "/v1/images/generations",
+        json={"model": "gpt-image-2", "prompt": "paint a crab", "n": 2},
+    )
+
+    assert response.status_code == 400
+    assert response.headers["x-codex-primary-used-percent"] == "42.0"
+    assert response.headers["x-codex-primary-window-minutes"] == "300"
+    assert response.headers["x-codex-primary-reset-at"] == "1735689600"
+    assert response.json()["error"] == {
+        "message": "n must be 1; multiple images per request are not supported by the upstream image_generation "
+        "tool yet. Issue the request multiple times to get more images.",
+        "type": "invalid_request_error",
+        "code": "invalid_request_error",
+        "param": "n",
+    }
+
+
+@pytest.mark.asyncio
+async def test_v1_images_variations_preserves_rate_limit_headers_on_unsupported_error(async_client):
+    await _import_proxy_account(async_client, account_id="acc_img_variation_headers", email="image-var@example.com")
+    await _seed_image_rate_limit_headers("acc_img_variation_headers", "image-var@example.com")
+
+    response = await async_client.post(
+        "/v1/images/variations",
+        files={"image": ("crab.png", b"fake-png", "image/png")},
+        data={"model": "gpt-image-1", "prompt": "vary crab"},
+    )
+
+    assert response.status_code == 400
+    assert response.headers["x-codex-primary-used-percent"] == "42.0"
+    assert response.json()["error"] == {
+        "message": "The /v1/images/variations endpoint is not supported by this proxy",
+        "type": "invalid_request_error",
+        "code": "not_supported",
+    }
+
+
+@pytest.mark.asyncio
+async def test_v1_images_generations_enforces_model_scope_before_upstream(async_client, monkeypatch):
+    await _enable_api_key_auth(async_client)
+    key = await _create_proxy_api_key(async_client, name="image-scope", allowedModels=["gpt-image-1"])
+    called = False
+
+    async def fake_stream(payload, headers, access_token, account_id, base_url=None, raise_for_status=False, **kwargs):
+        del payload, headers, access_token, account_id, base_url, raise_for_status, kwargs
+        nonlocal called
+        called = True
+        yield "data: [DONE]\n\n"
+
+    monkeypatch.setattr(proxy_module, "core_stream_responses", fake_stream)
+
+    response = await async_client.post(
+        "/v1/images/generations",
+        headers={"Authorization": f"Bearer {key}"},
+        json={"model": "gpt-image-2", "prompt": "paint a crab"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["error"] == {
+        "message": "This API key does not have access to model 'gpt-image-2'",
+        "type": "permission_error",
+        "code": "model_not_allowed",
+    }
+    assert called is False
 
 
 @pytest.mark.asyncio
