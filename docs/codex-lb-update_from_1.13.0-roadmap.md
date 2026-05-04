@@ -23,7 +23,7 @@ Upgrade the current `codex-lb` deployment from the local 1.13.0-derived state to
 - Retained unstaged non-doc/code work remains after Sprint 2 and must be preserved before Sprint 3 branch isolation; do not discard it without an explicit operator decision.
 - Upstream `v1.15.0` includes important proxy fixes and GPT-5.5/GPT-5.5 Pro support, plus migrations for request log lookup and plan type metadata.
 - PR #498 is merged into upstream `main` but is not part of `v1.15.0`. It is available locally as `upstream/pr/498` for patch-source inspection. The `v1.15.0...upstream/pr/498` range touches `app/core/openai/images.py`, `app/core/openai/strict_schema.py`, `app/modules/proxy/images_service.py`, `app/modules/proxy/api.py`, `app/modules/proxy/service.py`, `app/core/clients/proxy.py`, `app/core/config/settings.py`, `app/core/usage/pricing.py`, `app/modules/request_logs/repository.py`, OpenSpec docs, and image/proxy tests. Keep this isolated so it can be dropped or rebased when upstream 1.16 lands.
-- Sprint 3 implementation checklist created at `docs/codex-lb-update_from_1.13.0-sprint3-checklist.md`; it plans an isolated code/test integration sprint with no live Docker cutover and no real image-generation smoke until Sprint 4.
+- Sprint 3 implementation checklist completed at `docs/codex-lb-update_from_1.13.0-sprint3-checklist.md`; evidence is recorded in `/home/vgoro/codex-lb-backups/20260504-074350/sprint3/sprint3-evidence.md`, with no live Docker cutover and no real image-generation smoke until Sprint 4.
 
 ## Non-negotiable constraints
 
@@ -78,7 +78,7 @@ Exit criteria:
 - Rollback instructions and backup location are documented privately outside Git if they contain secrets.
 - Sprint 2 evidence bundle and completion docs commit are recorded.
 
-### [ ] Sprint 3 — Integrate PR #498 as an isolated image API patch
+### [x] Sprint 3 — Integrate PR #498 as an isolated image API patch
 
 Purpose: add OpenAI-compatible `/v1/images` support for `gpt-image-2` on top of the stable 1.15.0 deployment branch without mixing unrelated upstream drift.
 
@@ -138,7 +138,7 @@ Exit criteria:
 
 ## First sprint selected
 
-Sprint 1 — Upgrade foundation to upstream `v1.15.0` and Sprint 2 — Docker cutover and live 1.15.0 compatibility validation are completed. Sprint 3 — Integrate PR #498 as an isolated image API patch is now selected and planned in `docs/codex-lb-update_from_1.13.0-sprint3-checklist.md`.
+Sprint 1 — Upgrade foundation to upstream `v1.15.0`, Sprint 2 — Docker cutover and live 1.15.0 compatibility validation, and Sprint 3 — Integrate PR #498 as an isolated image API patch are completed. Sprint 4 — gpt-image-2 hardening and live smoke is the next planned sprint after operator review.
 
 ## Open risks
 

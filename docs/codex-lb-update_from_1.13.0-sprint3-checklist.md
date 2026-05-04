@@ -44,33 +44,33 @@ Does not cover:
 
 ## Phase A — Baseline isolation and PR intake
 ### Issue 1 — Confirm Sprint 2 baseline and isolate the Sprint 3 branch
-Status: [ ] Planned
+Status: [x] Completed
 Files:
 - docs/codex-lb-update_from_1.13.0-roadmap.md
 - docs/codex-lb-update_from_1.13.0-sprint2-checklist.md
 - docs/codex-lb-update_from_1.13.0-sprint3-checklist.md
 Checklist:
-- [ ] Verify Sprint 2 is marked complete in the roadmap and checklist.
-- [ ] Record branch, HEAD, remotes, `git status --short --branch`, and retained unstaged changes in `/home/vgoro/codex-lb-backups/<timestamp>/sprint3/baseline/repo-state.txt`.
-- [ ] Create or confirm an isolated Sprint 3 branch on top of the approved 1.15.0 baseline without discarding retained worktree changes.
-- [ ] Verify `git diff --check` and `git diff --exit-code -- uv.lock` before importing the PR #498 patch.
-Planned commit: [ ] chore(upgrade): start isolated sprint 3 image branch
+- [x] Verify Sprint 2 is marked complete in the roadmap and checklist.
+- [x] Record branch, HEAD, remotes, `git status --short --branch`, and retained unstaged changes in `/home/vgoro/codex-lb-backups/<timestamp>/sprint3/baseline/repo-state.txt`.
+- [x] Create or confirm an isolated Sprint 3 branch on top of the approved 1.15.0 baseline without discarding retained worktree changes.
+- [x] Verify `git diff --check` and `git diff --exit-code -- uv.lock` before importing the PR #498 patch.
+Completed commit: [x] chore(upgrade): start isolated sprint 3 image branch
 
 ### Issue 2 — Capture PR #498 patch inventory and conflict map
-Status: [ ] Planned
+Status: [x] Completed
 Files:
 - docs/codex-lb-update_from_1.13.0-sprint3-checklist.md
 - /home/vgoro/codex-lb-backups/<timestamp>/sprint3/pr498-inventory.txt
 Checklist:
-- [ ] Record `gh pr view 498 --repo Soju06/codex-lb` or an equivalent `git diff --name-status v1.15.0...upstream/pr/498` inventory.
-- [ ] Identify every PR #498 file that conflicts with the current 1.15.0 branch or retained local work.
-- [ ] Decide whether to cherry-pick the PR merge commit, cherry-pick individual commits, or port manually by file; record the selected strategy before editing code.
-- [ ] Confirm the selected strategy keeps the image patch separable from later upstream 1.16 work.
-Planned commit: [ ] docs(upgrade): record sprint 3 pr498 intake
+- [x] Record `gh pr view 498 --repo Soju06/codex-lb` or an equivalent `git diff --name-status v1.15.0...upstream/pr/498` inventory.
+- [x] Identify every PR #498 file that conflicts with the current 1.15.0 branch or retained local work.
+- [x] Decide whether to cherry-pick the PR merge commit, cherry-pick individual commits, or port manually by file; record the selected strategy before editing code.
+- [x] Confirm the selected strategy keeps the image patch separable from later upstream 1.16 work.
+Completed commit: [x] docs(upgrade): record sprint 3 pr498 intake
 
 ## Phase B — Public schemas, settings, and pricing
 ### Issue 3 — Add OpenAI Images public schema and validation layer
-Status: [ ] Planned
+Status: [x] Completed
 Files:
 - app/core/openai/images.py
 - app/core/openai/strict_schema.py
@@ -78,63 +78,63 @@ Files:
 - tests/unit/test_images_schemas.py
 - tests/unit/test_strict_schema_validation.py
 Checklist:
-- [ ] Add request models for `/v1/images/generations` JSON bodies and `/v1/images/edits` multipart form fields.
-- [ ] Add response models for non-streaming image results and streaming image events.
-- [ ] Enforce `gpt-image-2` quality, size, background, output format, moderation, `input_fidelity`, `partial_images`, and `n` validation before any upstream request is opened.
-- [ ] Preserve legacy `gpt-image-1.5`, `gpt-image-1`, and `gpt-image-1-mini` validation exactly where PR #498 requires it.
-- [ ] Add strict text-format validation helpers only where needed by the PR, and verify they do not regress existing Responses/Chat request validation.
-- [ ] Run schema tests and `ruff check` for touched schema/helper files.
-Planned commit: [ ] feat(images): add public image request schemas
+- [x] Add request models for `/v1/images/generations` JSON bodies and `/v1/images/edits` multipart form fields.
+- [x] Add response models for non-streaming image results and streaming image events.
+- [x] Enforce `gpt-image-2` quality, size, background, output format, moderation, `input_fidelity`, `partial_images`, and `n` validation before any upstream request is opened.
+- [x] Preserve legacy `gpt-image-1.5`, `gpt-image-1`, and `gpt-image-1-mini` validation exactly where PR #498 requires it.
+- [x] Add strict text-format validation helpers only where needed by the PR, and verify they do not regress existing Responses/Chat request validation.
+- [x] Run schema tests and `ruff check` for touched schema/helper files.
+Completed commit: [x] feat(images): add public image request schemas
 
 ### Issue 4 — Add image configuration and pricing metadata
-Status: [ ] Planned
+Status: [x] Completed
 Files:
 - app/core/config/settings.py
 - app/core/usage/pricing.py
 - tests/unit/test_images_schemas.py
 - tests/integration/test_v1_usage.py
 Checklist:
-- [ ] Add `images_host_model`, `images_default_model`, and `images_max_partial_images` settings with safe defaults and validation.
-- [ ] Do not add an `images_max_n` setting unless fan-out is implemented in the same issue; `n > 1` must still reject deterministically.
-- [ ] Add model pricing aliases for `gpt-image-2` and legacy `gpt-image-*` entries so model-scoped API-key limits and usage cost summaries do not resolve to zero by accident.
-- [ ] Verify configuration defaults do not expose the internal host model in public responses.
-- [ ] Run targeted pricing/settings tests and `ruff check` for touched files.
-Planned commit: [ ] feat(images): add image settings and pricing metadata
+- [x] Add `images_host_model`, `images_default_model`, and `images_max_partial_images` settings with safe defaults and validation.
+- [x] Do not add an `images_max_n` setting unless fan-out is implemented in the same issue; `n > 1` must still reject deterministically.
+- [x] Add model pricing aliases for `gpt-image-2` and legacy `gpt-image-*` entries so model-scoped API-key limits and usage cost summaries do not resolve to zero by accident.
+- [x] Verify configuration defaults do not expose the internal host model in public responses.
+- [x] Run targeted pricing/settings tests and `ruff check` for touched files.
+Completed commit: [x] feat(images): add image settings and pricing metadata
 
 ## Phase C — Translation service and `/v1/images` routes
 ### Issue 5 — Add image-to-Responses translation service
-Status: [ ] Planned
+Status: [x] Completed
 Files:
 - app/modules/proxy/images_service.py
 - app/core/openai/images.py
 - tests/unit/test_images_translation.py
 Checklist:
-- [ ] Build internal Responses requests with `tools: [{"type": "image_generation", ...}]` and deterministic instructions that force one image-generation tool call.
-- [ ] Convert generation prompts and edit image/mask parts into valid Responses input content, including base64 data URL handling.
-- [ ] Keep the internal host model hidden from public responses while preserving the public `gpt-image-*` model in image tool config and downstream metadata.
-- [ ] Convert upstream non-streaming Responses output into OpenAI Images envelopes with image data, revised prompt, created timestamp, and usage metadata.
-- [ ] Convert upstream stream events into canonical `image_generation.*` or `image_edit.*` SSE events and terminate cleanly.
-- [ ] Map upstream image failures and content policy failures into OpenAI-compatible error envelopes.
-- [ ] Run translation tests and `ruff check` for the service and schema files.
-Planned commit: [ ] feat(images): translate image requests through responses tool
+- [x] Build internal Responses requests with `tools: [{"type": "image_generation", ...}]` and deterministic instructions that force one image-generation tool call.
+- [x] Convert generation prompts and edit image/mask parts into valid Responses input content, including base64 data URL handling.
+- [x] Keep the internal host model hidden from public responses while preserving the public `gpt-image-*` model in image tool config and downstream metadata.
+- [x] Convert upstream non-streaming Responses output into OpenAI Images envelopes with image data, revised prompt, created timestamp, and usage metadata.
+- [x] Convert upstream stream events into canonical `image_generation.*` or `image_edit.*` SSE events and terminate cleanly.
+- [x] Map upstream image failures and content policy failures into OpenAI-compatible error envelopes.
+- [x] Run translation tests and `ruff check` for the service and schema files.
+Completed commit: [x] feat(images): translate image requests through responses tool
 
 ### Issue 6 — Expose `/v1/images/generations`, `/v1/images/edits`, and unsupported variations
-Status: [ ] Planned
+Status: [x] Completed
 Files:
 - app/modules/proxy/api.py
 - app/modules/proxy/images_service.py
 - tests/integration/test_proxy_images.py
 Checklist:
-- [ ] Add `POST /v1/images/generations` with JSON input and JSON or `text/event-stream` output depending on `stream`.
-- [ ] Add `POST /v1/images/edits` with multipart `image`, `image[]`, optional `mask`, and image parameter fields.
-- [ ] Add explicit `POST /v1/images/variations` unsupported response with OpenAI error shape.
-- [ ] Apply API-key authentication, OpenAI error formatting, request limit enforcement, and rate-limit headers consistently with existing `/v1` routes.
-- [ ] Return validation errors before account selection or upstream dispatch whenever the request is invalid.
-- [ ] Run image route integration tests and `ruff check` for touched API files.
-Planned commit: [ ] feat(proxy): expose openai images endpoints
+- [x] Add `POST /v1/images/generations` with JSON input and JSON or `text/event-stream` output depending on `stream`.
+- [x] Add `POST /v1/images/edits` with multipart `image`, `image[]`, optional `mask`, and image parameter fields.
+- [x] Add explicit `POST /v1/images/variations` unsupported response with OpenAI error shape.
+- [x] Apply API-key authentication, OpenAI error formatting, request limit enforcement, and rate-limit headers consistently with existing `/v1` routes.
+- [x] Return validation errors before account selection or upstream dispatch whenever the request is invalid.
+- [x] Run image route integration tests and `ruff check` for touched API files.
+Completed commit: [x] feat(proxy): expose openai images endpoints
 
 ### Issue 7 — Route image-generation traffic over safe HTTP/SSE transport
-Status: [ ] Planned
+Status: [x] Completed
 Files:
 - app/core/clients/proxy.py
 - app/modules/proxy/service.py
@@ -143,31 +143,31 @@ Files:
 - tests/unit/test_proxy_utils.py
 - tests/integration/test_openai_compat_features.py
 Checklist:
-- [ ] Detect internal Responses payloads that contain the built-in `image_generation` tool.
-- [ ] In auto transport mode, force upstream HTTP/SSE for image-generation requests while preserving explicit operator transport settings.
-- [ ] Preserve existing websocket and HTTP bridge behavior for non-image Responses and Chat traffic.
-- [ ] Keep stream size/budget handling compatible with large base64 image events.
-- [ ] Run transport-selection regressions plus existing OpenAI compatibility tests and `ruff check` for touched proxy/client files.
-Planned commit: [ ] fix(proxy): route image generation over http transport
+- [x] Detect internal Responses payloads that contain the built-in `image_generation` tool.
+- [x] In auto transport mode, force upstream HTTP/SSE for image-generation requests while preserving explicit operator transport settings.
+- [x] Preserve existing websocket and HTTP bridge behavior for non-image Responses and Chat traffic.
+- [x] Keep stream size/budget handling compatible with large base64 image events.
+- [x] Run transport-selection regressions plus existing OpenAI compatibility tests and `ruff check` for touched proxy/client files.
+Completed commit: [x] fix(proxy): route image generation over http transport
 
 ## Phase D — API-key policy, request logs, and usage accounting
 ### Issue 8 — Enforce public image model policy for API keys and reservations
-Status: [ ] Planned
+Status: [x] Completed
 Files:
 - app/modules/proxy/api.py
 - app/modules/api_keys/service.py
 - tests/integration/test_proxy_images.py
 - tests/integration/test_api_keys_api.py
 Checklist:
-- [ ] Resolve the effective public model before request validation and before the internal host model swap.
-- [ ] Apply `validate_model_access` and model-scoped API-key limit reservations to the public `gpt-image-*` model.
-- [ ] Ensure API keys that do not allow `gpt-image-2` receive `model_not_allowed` before any upstream request is opened.
-- [ ] Ensure reservation finalization failures are logged and do not corrupt a successful image response.
-- [ ] Run image/API-key integration tests and `ruff check` for touched policy files.
-Planned commit: [ ] feat(images): enforce api key image model policy
+- [x] Resolve the effective public model before request validation and before the internal host model swap.
+- [x] Apply `validate_model_access` and model-scoped API-key limit reservations to the public `gpt-image-*` model.
+- [x] Ensure API keys that do not allow `gpt-image-2` receive `model_not_allowed` before any upstream request is opened.
+- [x] Ensure reservation finalization failures are logged and do not corrupt a successful image response.
+- [x] Run image/API-key integration tests and `ruff check` for touched policy files.
+Completed commit: [x] feat(images): enforce api key image model policy
 
 ### Issue 9 — Record request logs and usage under the public image model
-Status: [ ] Planned
+Status: [x] Completed
 Files:
 - app/modules/proxy/service.py
 - app/modules/request_logs/repository.py
@@ -177,16 +177,16 @@ Files:
 - tests/unit/test_request_logs_repository.py
 - tests/integration/test_proxy_images.py
 Checklist:
-- [ ] Add a safe way for translated image requests to rewrite request-log model metadata from the internal host model to the public `gpt-image-*` model.
-- [ ] Preserve response id/account lookup behavior for previous-response and sticky-session flows.
-- [ ] Confirm dashboard request-log filters and usage summaries can surface `gpt-image-2` without mixing it with the host model.
-- [ ] Confirm costs are calculated from the public image pricing metadata.
-- [ ] Run request-log/usage tests and `ruff check` for touched accounting files.
-Planned commit: [ ] feat(images): account image requests under public model
+- [x] Add a safe way for translated image requests to rewrite request-log model metadata from the internal host model to the public `gpt-image-*` model.
+- [x] Preserve response id/account lookup behavior for previous-response and sticky-session flows.
+- [x] Confirm dashboard request-log filters and usage summaries can surface `gpt-image-2` without mixing it with the host model.
+- [x] Confirm costs are calculated from the public image pricing metadata.
+- [x] Run request-log/usage tests and `ruff check` for touched accounting files.
+Completed commit: [x] feat(images): account image requests under public model
 
 ## Phase E — Specs, regression gates, and evidence
 ### Issue 10 — Add OpenSpec compatibility notes for Images API
-Status: [ ] Planned
+Status: [x] Completed
 Files:
 - openspec/changes/add-images-api-compat/proposal.md
 - openspec/changes/add-images-api-compat/specs/images-api-compat/spec.md
@@ -194,15 +194,15 @@ Files:
 - openspec/specs/responses-api-compat/spec.md
 - docs/codex-lb-update_from_1.13.0-roadmap.md
 Checklist:
-- [ ] Port PR #498 OpenSpec change docs and adapt them to the 1.15.0 branch state.
-- [ ] Document that `/v1/images/generations` and `/v1/images/edits` are supported through the internal Responses `image_generation` tool.
-- [ ] Document that `/v1/images/variations` remains unsupported.
-- [ ] Document that direct Chat/Responses built-in-tool compatibility remains unchanged except for the internal image adapter path.
-- [ ] Run `git diff --check` for all docs/spec files.
-Planned commit: [ ] docs(images): document images api compatibility patch
+- [x] Port PR #498 OpenSpec change docs and adapt them to the 1.15.0 branch state.
+- [x] Document that `/v1/images/generations` and `/v1/images/edits` are supported through the internal Responses `image_generation` tool.
+- [x] Document that `/v1/images/variations` remains unsupported.
+- [x] Document that direct Chat/Responses built-in-tool compatibility remains unchanged except for the internal image adapter path.
+- [x] Run `git diff --check` for all docs/spec files.
+Completed commit: [x] docs(images): document images api compatibility patch
 
 ### Issue 11 — Run focused image quality gate and existing proxy regressions
-Status: [ ] Planned
+Status: [x] Completed
 Files:
 - tests/integration/test_proxy_images.py
 - tests/unit/test_images_schemas.py
@@ -215,39 +215,39 @@ Files:
 - tests/unit/test_proxy_utils.py
 - tests/unit/test_proxy_load_balancer_refresh.py
 Checklist:
-- [ ] Run the focused image unit/integration test suite.
-- [ ] Run existing proxy, request-log, usage, models, and API-key regression tests that guard 1.15.0 behavior.
-- [ ] Run `uvx ruff check` for every touched backend source and test path.
-- [ ] Verify `git diff --check`, `git diff --cached --check`, and `uv.lock` cleanliness after the test run.
-- [ ] Save test and linter logs to `/home/vgoro/codex-lb-backups/<timestamp>/sprint3/tests/`.
-Planned commit: [ ] test(images): prove images patch and proxy regressions
+- [x] Run the focused image unit/integration test suite.
+- [x] Run existing proxy, request-log, usage, models, and API-key regression tests that guard 1.15.0 behavior.
+- [x] Run `uvx ruff check` for every touched backend source and test path.
+- [x] Verify `git diff --check`, `git diff --cached --check`, and `uv.lock` cleanliness after the test run.
+- [x] Save test and linter logs to `/home/vgoro/codex-lb-backups/<timestamp>/sprint3/tests/`.
+Completed commit: [x] test(images): prove images patch and proxy regressions
 
 ### Issue 12 — Produce Sprint 3 evidence and update completion docs
-Status: [ ] Planned
+Status: [x] Completed
 Files:
 - docs/codex-lb-update_from_1.13.0-roadmap.md
 - docs/codex-lb-update_from_1.13.0-sprint3-checklist.md
 - /home/vgoro/codex-lb-backups/<timestamp>/sprint3/sprint3-evidence.md
 Checklist:
-- [ ] Create a Sprint 3 evidence bundle linking branch baseline, PR intake, patch strategy, tests, linters, request-log/usage verification, and secret scan results.
-- [ ] Scan Sprint 3 runtime/test artifacts for secret-bearing patterns using suppressed match output and record pass/fail only.
-- [ ] Update the roadmap to show Sprint 3 completion only after all quality gates pass.
-- [ ] Update this checklist from `Planned` to `Completed` only after evidence and final commit are ready.
-- [ ] Create a clean final docs/evidence commit without staging unrelated code.
-Planned commit: [ ] docs(upgrade): complete sprint 3 evidence
+- [x] Create a Sprint 3 evidence bundle linking branch baseline, PR intake, patch strategy, tests, linters, request-log/usage verification, and secret scan results.
+- [x] Scan Sprint 3 runtime/test artifacts for secret-bearing patterns using suppressed match output and record pass/fail only.
+- [x] Update the roadmap to show Sprint 3 completion only after all quality gates pass.
+- [x] Update this checklist from `Planned` to `Completed` only after evidence and final commit are ready.
+- [x] Create a clean final docs/evidence commit without staging unrelated code.
+Completed commit: [x] docs(upgrade): complete sprint 3 evidence
 
 ## Sprint quality gates
-- [ ] Sprint 3 branch starts from the approved 1.15.0 Sprint 2 baseline and keeps the image patch isolated from unrelated upstream drift.
-- [ ] `/v1/images/generations` supports valid `gpt-image-2` non-streaming and streaming requests in mocked integration tests.
-- [ ] `/v1/images/edits` supports multipart image input and rejects invalid edit-only parameters in mocked integration tests.
-- [ ] `/v1/images/variations` returns an explicit unsupported OpenAI-shaped error.
-- [ ] Invalid public models, invalid `gpt-image-2` sizes, transparent background, invalid `input_fidelity`, and `n > 1` all fail before upstream dispatch.
-- [ ] API-key allowed-model and model-scoped reservation checks use the public `gpt-image-*` model, not the internal host model.
-- [ ] Request logs, usage summaries, and pricing metadata surface the public `gpt-image-*` model.
-- [ ] Existing `/v1/responses`, `/v1/chat/completions`, `/v1/audio/transcriptions`, `/v1/models`, request-log, and usage regression tests still pass.
-- [ ] `git diff --check`, `git diff --cached --check`, targeted `pytest`, and `uvx ruff check` pass.
-- [ ] `uv.lock` is clean unless an explicitly approved dependency issue requires changing it.
-- [ ] Sprint 3 artifacts and docs contain no raw API keys, OAuth token JSON, database dumps, encryption key material, or full Authorization headers.
+- [x] Sprint 3 branch starts from the approved 1.15.0 Sprint 2 baseline and keeps the image patch isolated from unrelated upstream drift.
+- [x] `/v1/images/generations` supports valid `gpt-image-2` non-streaming and streaming requests in mocked integration tests.
+- [x] `/v1/images/edits` supports multipart image input and rejects invalid edit-only parameters in mocked integration tests.
+- [x] `/v1/images/variations` returns an explicit unsupported OpenAI-shaped error.
+- [x] Invalid public models, invalid `gpt-image-2` sizes, transparent background, invalid `input_fidelity`, and `n > 1` all fail before upstream dispatch.
+- [x] API-key allowed-model and model-scoped reservation checks use the public `gpt-image-*` model, not the internal host model.
+- [x] Request logs, usage summaries, and pricing metadata surface the public `gpt-image-*` model.
+- [x] Existing `/v1/responses`, `/v1/chat/completions`, `/v1/audio/transcriptions`, `/v1/models`, request-log, and usage regression tests still pass.
+- [x] `git diff --check`, `git diff --cached --check`, targeted `pytest`, and `uvx ruff check` pass.
+- [x] `uv.lock` is clean unless an explicitly approved dependency issue requires changing it.
+- [x] Sprint 3 artifacts and docs contain no raw API keys, OAuth token JSON, database dumps, encryption key material, or full Authorization headers.
 
 ## Quick verification commands
 ```bash
