@@ -103,22 +103,26 @@ Exit criteria:
 - No Sprint 3 artifact contains raw keys, token JSON, database dumps, encryption key material, or full Authorization headers.
 - Sprint 3 evidence is recorded and the roadmap/checklist are updated only after tests and linters pass.
 
-### [ ] Sprint 4 — gpt-image-2 hardening and live smoke
+### [x] Sprint 4 — gpt-image-2 hardening and live smoke
 
-Purpose: validate the image API behavior with real accounts and operational limits without destabilizing text proxy traffic.
+Purpose: validate the isolated image API patch with the live Docker deployment, existing account pool authentication, conservative generated-image limits, public-model accounting, and a documented rollback path without destabilizing text proxy traffic.
 
 Includes:
 
-- Live smoke for non-streaming and streaming image generation with conservative limits.
-- Confirm `n > 1` and unsupported models/sizes/backgrounds fail predictably.
-- Confirm request logs show the public `gpt-image-*` model rather than the internal host model.
-- Document operational settings (`images_default_model`, `images_host_model`, image limits) and rollback.
+- Capture a Sprint 4 baseline for the live two-container Docker deployment, preserving `localai_codex-lb-data` and `.env.local`/encryption key material.
+- Document operational image settings (`CODEX_LB_IMAGES_DEFAULT_MODEL`, `CODEX_LB_IMAGES_HOST_MODEL`, `CODEX_LB_IMAGES_MAX_PARTIAL_IMAGES`, event-size/transport assumptions) without committing secrets.
+- Run validation-only negative smokes before any real generation: unsupported model, invalid `gpt-image-2` size/background/input-fidelity, `n > 1`, `/v1/images/variations`, and image-model API-key scope rejection.
+- Run one conservative non-streaming `gpt-image-2` generation and one conservative streaming `gpt-image-2` generation only after health and validation-only gates pass.
+- Confirm request logs, filter options, and usage/cost summaries surface the public `gpt-image-*` model rather than the internal host model.
+- Re-run text proxy health/regression smokes after image traffic and document exact rollback commands.
 
 Exit criteria:
 
-- `gpt-image-2` works through the `codex-lb` API with existing account pool auth.
+- `gpt-image-2` non-streaming and streaming requests work through the `codex-lb` API with existing account pool auth.
+- Validation-only negative image cases fail predictably before upstream dispatch where applicable.
+- Request logs and usage summaries show public `gpt-image-*` metadata, not `images_host_model`.
 - Text/model proxy surfaces remain healthy after image traffic.
-- Runtime settings are documented and no secrets are committed.
+- Runtime settings, evidence, and rollback are documented with no secrets committed.
 
 ### [ ] Sprint 5 — 1.16 readiness and upstream alignment
 
@@ -138,7 +142,7 @@ Exit criteria:
 
 ## First sprint selected
 
-Sprint 1 — Upgrade foundation to upstream `v1.15.0`, Sprint 2 — Docker cutover and live 1.15.0 compatibility validation, and Sprint 3 — Integrate PR #498 as an isolated image API patch are completed. Sprint 4 — gpt-image-2 hardening and live smoke is the next planned sprint after operator review.
+Sprint 1 — Upgrade foundation to upstream `v1.15.0`, Sprint 2 — Docker cutover and live 1.15.0 compatibility validation, Sprint 3 — Integrate PR #498 as an isolated image API patch, and Sprint 4 — gpt-image-2 hardening and live smoke are completed. Sprint 5 — 1.16 readiness and upstream alignment is selected next for detailed implementation planning.
 
 ## Open risks
 
