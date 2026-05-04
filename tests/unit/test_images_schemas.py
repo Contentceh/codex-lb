@@ -21,6 +21,7 @@ from app.core.openai.images import (
     validate_image_request_parameters,
     validate_image_size,
 )
+from app.core.usage.pricing import DEFAULT_MODEL_ALIASES, DEFAULT_PRICING_MODELS, get_pricing_for_model
 
 
 class TestV1ImagesGenerationsRequest:
@@ -419,3 +420,28 @@ class TestValidateImageRequestParameters:
         with pytest.raises(ClientPayloadError) as excinfo:
             _validate_default(moderation="strict")
         assert excinfo.value.param == "moderation"
+
+
+class TestImagePricingAliases:
+    @pytest.mark.parametrize(
+        ("model", "canonical"),
+        [
+            ("gpt-image-2", "gpt-image-2"),
+            ("gpt-image-2-2026-04-01", "gpt-image-2"),
+            ("gpt-image-1.5", "gpt-image-1.5"),
+            ("gpt-image-1.5-2026-04-01", "gpt-image-1.5"),
+            ("gpt-image-1-mini", "gpt-image-1-mini"),
+            ("gpt-image-1-mini-2026-04-01", "gpt-image-1-mini"),
+            ("gpt-image-1", "gpt-image-1"),
+            ("gpt-image-1-2026-04-01", "gpt-image-1"),
+        ],
+    )
+    def test_public_image_models_have_pricing_aliases(self, model: str, canonical: str) -> None:
+        resolved = get_pricing_for_model(model, DEFAULT_PRICING_MODELS, DEFAULT_MODEL_ALIASES)
+
+        assert resolved is not None
+        resolved_model, price = resolved
+        assert resolved_model == canonical
+        assert price.input_per_1m == 5.0
+        assert price.cached_input_per_1m == 2.0
+        assert price.output_per_1m == 30.0

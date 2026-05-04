@@ -431,6 +431,37 @@ async def test_v1_usage_still_works_when_global_api_key_auth_is_disabled(async_c
 
 
 @pytest.mark.asyncio
+async def test_v1_usage_charges_public_image_model_logs(async_client):
+    key_id, plain_key = await _create_api_key(name="image-usage-key")
+    now = utcnow()
+
+    async with SessionLocal() as session:
+        logs = RequestLogsRepository(session)
+        await logs.add_log(
+            account_id=None,
+            api_key_id=key_id,
+            request_id="req_v1_usage_image_public",
+            model="gpt-image-2-2026-04-01",
+            input_tokens=1_000_000,
+            output_tokens=1_000_000,
+            cached_input_tokens=250_000,
+            latency_ms=250,
+            status="success",
+            error_code=None,
+            requested_at=now - timedelta(minutes=1),
+        )
+
+    response = await async_client.get("/v1/usage", headers={"Authorization": f"Bearer {plain_key}"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["request_count"] == 1
+    assert payload["total_tokens"] == 2_000_000
+    assert payload["cached_input_tokens"] == 250_000
+    assert payload["total_cost_usd"] == pytest.approx(34.25)
+
+
+@pytest.mark.asyncio
 async def test_v1_usage_returns_aggregate_credit_limits_when_upstream_usage_exists(async_client):
     _, plain_key = await _create_api_key(name="fallback-aggregate")
     now = utcnow()

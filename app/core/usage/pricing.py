@@ -224,6 +224,36 @@ DEFAULT_PRICING_MODELS: dict[str, ModelPrice] = {
         priority_cached_input_per_1m=0.25,
         priority_output_per_1m=20.0,
     ),
+    # OpenAI Images token-based pricing (per 1M tokens, USD).
+    # gpt-image-2 (April 2026):
+    #   text input  $5.00, image input $8.00, image cached input $2.00,
+    #   image output $30.00.
+    # The current ``ModelPrice`` shape carries a single input rate, so we use
+    # the text-input rate as the dominant input cost and the image-output rate
+    # as the output cost. Cached input maps to the image-cached rate.
+    # Legacy public image models mirror gpt-image-2 until OpenAI publishes
+    # separate deltas. Without these entries, cost-based API-key quotas would
+    # resolve every /v1/images/* call to $0 and never bite.
+    "gpt-image-2": ModelPrice(
+        input_per_1m=5.0,
+        cached_input_per_1m=2.0,
+        output_per_1m=30.0,
+    ),
+    "gpt-image-1.5": ModelPrice(
+        input_per_1m=5.0,
+        cached_input_per_1m=2.0,
+        output_per_1m=30.0,
+    ),
+    "gpt-image-1": ModelPrice(
+        input_per_1m=5.0,
+        cached_input_per_1m=2.0,
+        output_per_1m=30.0,
+    ),
+    "gpt-image-1-mini": ModelPrice(
+        input_per_1m=5.0,
+        cached_input_per_1m=2.0,
+        output_per_1m=30.0,
+    ),
 }
 
 DEFAULT_MODEL_ALIASES: dict[str, str] = {
@@ -247,6 +277,10 @@ DEFAULT_MODEL_ALIASES: dict[str, str] = {
     "gpt-5.1-codex-mini*": "gpt-5.1-codex-mini",
     "gpt-5.1-codex*": "gpt-5.1-codex",
     "gpt-5-codex*": "gpt-5-codex",
+    "gpt-image-2*": "gpt-image-2",
+    "gpt-image-1.5*": "gpt-image-1.5",
+    "gpt-image-1-mini*": "gpt-image-1-mini",
+    "gpt-image-1*": "gpt-image-1",
 }
 
 
