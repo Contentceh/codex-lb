@@ -6,7 +6,9 @@ from pydantic import ValidationError
 
 from app.core.errors import OpenAIErrorEnvelope, openai_error
 from app.core.exceptions import ProxyModelNotAllowed
+from app.core.openai.exceptions import ClientPayloadError
 from app.core.openai.requests import ResponsesCompactRequest, ResponsesReasoning, ResponsesRequest
+from app.core.openai.strict_schema import validate_strict_json_schema
 from app.core.openai.v1_requests import V1ResponsesRequest
 from app.core.types import JsonValue
 from app.core.utils.request_id import get_request_id
@@ -91,11 +93,50 @@ def openai_invalid_payload_error(param: str | None = None) -> OpenAIErrorEnvelop
     return error
 
 
+def openai_client_payload_error(exc: ClientPayloadError) -> OpenAIErrorEnvelope:
+    """Render a ``ClientPayloadError`` as an OpenAI error envelope."""
+    if exc.code is None and exc.error_type is None:
+        return openai_invalid_payload_error(exc.param)
+    code = exc.code or "invalid_request_error"
+    error_type = exc.error_type or "invalid_request_error"
+    error = openai_error(code, str(exc), error_type=error_type)
+    if exc.param:
+        error["error"]["param"] = exc.param
+    return error
+
+
 def normalize_responses_request_payload(
     payload: dict[str, JsonValue],
     *,
     openai_compat: bool,
 ) -> ResponsesRequest:
     if openai_compat:
-        return V1ResponsesRequest.model_validate(payload).to_responses_request()
-    return ResponsesRequest.model_validate(payload)
+        responses = V1ResponsesRequest.model_validate(payload).to_responses_request()
+    else:
+        responses = ResponsesRequest.model_validate(payload)
+    enforce_strict_text_format(responses)
+    return responses
+
+
+def enforce_strict_text_format(request: ResponsesRequest) -> None:
+    """Reject strict-mode JSON schemas that violate OpenAI structured-output rules."""
+    if request.text is None or request.text.format is None:
+        return
+    text_format = request.text.format
+    if text_format.type != "json_schema" or text_format.strict is not True:
+        return
+    if text_format.schema_ is None:
+        return
+    violation = validate_strict_json_schema(
+        text_format.schema_,
+        name=text_format.name,
+        param="text.format.schema",
+    )
+    if violation is None:
+        return
+    raise ClientPayloadError(
+        violation.message,
+        param=violation.param,
+        code=violation.code,
+        error_type="invalid_request_error",
+    )
