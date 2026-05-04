@@ -174,9 +174,6 @@ class _UsageRefreshSingleflight:
         with contextlib.suppress(BaseException):
             await asyncio.gather(*tasks, return_exceptions=True)
 
-    def clear(self) -> None:
-        self._inflight.clear()
-
 
 _USAGE_REFRESH_SINGLEFLIGHT = _UsageRefreshSingleflight()
 

@@ -19,6 +19,16 @@ services:
       - --reload
     volumes:
       - codex-lb-data:/var/lib/codex-lb
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "http_proxy= https_proxy= HTTP_PROXY= HTTPS_PROXY= python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:2455/health/ready')\" || exit 1",
+        ]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
     develop:
       watch:
         - action: sync

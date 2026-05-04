@@ -213,7 +213,7 @@ _ACCOUNT_RECOVERY_RETRY_CODES = frozenset(
         *PERMANENT_FAILURE_CODES.keys(),
     }
 )
-_TRANSIENT_RETRY_CODES = frozenset({"server_error"})
+_TRANSIENT_RETRY_CODES = frozenset({"server_error", "stream_incomplete"})
 _MAX_TRANSIENT_SAME_ACCOUNT_RETRIES = 3
 _COMPACT_MAX_ACCOUNT_ATTEMPTS = 2
 _STREAM_MAX_ACCOUNT_ATTEMPTS = 3
@@ -7193,6 +7193,8 @@ class ProxyService:
                             settlement.error = _upstream_error_from_openai(error)
                             settlement.record_success = False
                             settlement.account_health_error = _should_penalize_stream_error(error_code)
+                            if allow_transient_retry and error_code in _TRANSIENT_RETRY_CODES and not saw_text_delta:
+                                raise _TransientStreamError(error_code, settlement.error)
                     if event_type in ("response.completed", "response.incomplete"):
                         response = event.response if event is not None else None
                         usage = response.usage if response else None
@@ -7705,7 +7707,7 @@ class _RetryableStreamError(Exception):
 
 
 class _TransientStreamError(Exception):
-    """Transient upstream error (e.g. 500 server_error) — retry on same account first."""
+    """Transient upstream error (for example server_error or pre-text stream_incomplete)."""
 
     def __init__(self, code: str, error: UpstreamError) -> None:
         super().__init__(code)

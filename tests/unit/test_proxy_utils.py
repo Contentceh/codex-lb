@@ -8519,6 +8519,55 @@ async def test_stream_midstream_generic_failure_is_neutral_to_account_health(mon
 
 
 @pytest.mark.asyncio
+async def test_stream_incomplete_before_text_delta_retries_without_downstream_failure(monkeypatch):
+    settings = _make_proxy_settings(log_proxy_service_tier_trace=False)
+    request_logs = _RequestLogsRecorder()
+    service = proxy_service.ProxyService(_repo_factory(request_logs))
+    account = _make_account("acc_stream_incomplete_retry")
+    record_error = AsyncMock()
+    record_success = AsyncMock()
+    stream_call_count = {"count": 0}
+
+    monkeypatch.setattr(proxy_service, "get_settings_cache", lambda: _SettingsCache(settings))
+    monkeypatch.setattr(proxy_service, "get_settings", lambda: settings)
+    monkeypatch.setattr(
+        service._load_balancer,
+        "select_account",
+        AsyncMock(return_value=AccountSelection(account=account, error_message=None)),
+    )
+    monkeypatch.setattr(service._load_balancer, "record_error", record_error)
+    monkeypatch.setattr(service._load_balancer, "record_success", record_success)
+    monkeypatch.setattr(service, "_ensure_fresh", AsyncMock(return_value=account))
+    monkeypatch.setattr(service, "_settle_stream_api_key_usage", AsyncMock(return_value=True))
+
+    async def fake_stream(payload, headers, access_token, account_id, base_url=None, raise_for_status=False):
+        del payload, headers, access_token, account_id, base_url, raise_for_status
+        stream_call_count["count"] += 1
+        if stream_call_count["count"] == 1:
+            yield 'data: {"type":"response.created","response":{"id":"resp_incomplete_1"}}\n\n'
+            yield (
+                'data: {"type":"response.failed","response":{"error":{"code":"stream_incomplete",'
+                '"message":"Upstream closed stream without completion"}}}\n\n'
+            )
+            return
+        yield 'data: {"type":"response.completed","response":{"id":"resp_retry_success"}}\n\n'
+
+    monkeypatch.setattr(proxy_service, "core_stream_responses", fake_stream)
+
+    payload = ResponsesRequest.model_validate({"model": "gpt-5.1", "instructions": "hi", "input": [], "stream": True})
+
+    chunks = [chunk async for chunk in service.stream_responses(payload, {"session_id": "sid-stream"})]
+
+    events = [json.loads(chunk.split("data: ", 1)[1]) for chunk in chunks]
+    assert stream_call_count["count"] == 2
+    assert all(event["type"] != "response.failed" for event in events)
+    assert events[-1]["type"] == "response.completed"
+    record_success.assert_awaited_once_with(account)
+    record_error.assert_not_awaited()
+    assert request_logs.calls[-1]["status"] == "success"
+
+
+@pytest.mark.asyncio
 async def test_stream_incomplete_records_success_without_account_error(monkeypatch):
     settings = _make_proxy_settings(log_proxy_service_tier_trace=False)
     request_logs = _RequestLogsRecorder()

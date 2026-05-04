@@ -6,13 +6,35 @@ from unittest.mock import AsyncMock
 import pytest
 from sqlalchemy.exc import ResourceClosedError
 
+from app.core.crypto import TokenEncryptor
+from app.core.utils.time import utcnow
+from app.db.models import Account, AccountStatus
 from app.db.session import SessionLocal
 from app.modules.request_logs.repository import RequestLogsRepository
 
 
 @pytest.mark.asyncio
-async def test_add_log_ignores_closed_transaction(monkeypatch) -> None:
+async def test_add_log_ignores_closed_transaction(db_setup, monkeypatch) -> None:
+    del db_setup
+    encryptor = TokenEncryptor()
+
     async with SessionLocal() as session:
+        session.add(
+            Account(
+                id="acc",
+                chatgpt_account_id="acc",
+                email="acc@example.test",
+                plan_type="plus",
+                access_token_encrypted=encryptor.encrypt("access"),
+                refresh_token_encrypted=encryptor.encrypt("refresh"),
+                id_token_encrypted=encryptor.encrypt("id"),
+                last_refresh=utcnow(),
+                status=AccountStatus.ACTIVE,
+                deactivation_reason=None,
+            )
+        )
+        await session.commit()
+
         repo = RequestLogsRepository(session)
 
         async def _commit_failure() -> None:

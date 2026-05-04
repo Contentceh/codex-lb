@@ -34,7 +34,6 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote
 
-
 SESSIONS_DIR_NAME = "sessions"
 
 
@@ -278,9 +277,7 @@ def parse_chatgpt_session_json(session_path: Path) -> SessionData:
         email = extract_email_from_access_token(access_token)
 
     if not email:
-        raise ValueError(
-            "Не удалось определить email: нет user.email и в accessToken нет профиля с email"
-        )
+        raise ValueError("Не удалось определить email: нет user.email и в accessToken нет профиля с email")
 
     return SessionData(
         access_token=access_token,
@@ -298,9 +295,7 @@ def resolve_session_json_path(raw_path: str | None, search_directory: Path) -> P
         return json_path
 
     candidates = sorted(
-        path
-        for path in search_directory.glob("*.json")
-        if path.is_file() and not path.name.startswith("auth_")
+        path for path in search_directory.glob("*.json") if path.is_file() and not path.name.startswith("auth_")
     )
 
     if not candidates:
@@ -311,10 +306,7 @@ def resolve_session_json_path(raw_path: str | None, search_directory: Path) -> P
 
     if len(candidates) > 1:
         file_list = ", ".join(path.name for path in candidates)
-        raise ValueError(
-            "Найдено несколько подходящих JSON. Укажите путь явно: "
-            f"{file_list}"
-        )
+        raise ValueError(f"Найдено несколько подходящих JSON. Укажите путь явно: {file_list}")
 
     return candidates[0]
 
@@ -370,10 +362,7 @@ def resolve_har_path(raw_path: str | None, search_directory: Path) -> Path:
 
     if len(har_files) > 1:
         file_list = ", ".join(path.name for path in har_files)
-        raise ValueError(
-            "Найдено несколько HAR-файлов. Укажите путь явно: "
-            f"{file_list}"
-        )
+        raise ValueError(f"Найдено несколько HAR-файлов. Укажите путь явно: {file_list}")
 
     return har_files[0]
 

@@ -20,7 +20,10 @@ _ROTATED_BOOTSTRAP_TOKEN = "rotated-bootstrap-token"
 @pytest_asyncio.fixture(autouse=True)
 async def _reset_bootstrap_runtime(_reset_db_state, monkeypatch: pytest.MonkeyPatch):
     del _reset_db_state
-    monkeypatch.delenv("CODEX_LB_DASHBOARD_BOOTSTRAP_TOKEN", raising=False)
+    # Force auto-bootstrap coverage even when a developer or deployment .env
+    # file defines CODEX_LB_DASHBOARD_BOOTSTRAP_TOKEN. Removing the variable
+    # is not enough because Settings also reads dotenv files.
+    monkeypatch.setenv("CODEX_LB_DASHBOARD_BOOTSTRAP_TOKEN", "")
     tokens = iter([_AUTO_BOOTSTRAP_TOKEN, _ROTATED_BOOTSTRAP_TOKEN])
     monkeypatch.setattr(bootstrap_module.secrets, "token_urlsafe", lambda _size: next(tokens))
     get_settings.cache_clear()

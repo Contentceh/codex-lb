@@ -1,4 +1,4 @@
-import { z } from "zod";
+import * as z from "zod";
 
 import { AccountAdditionalQuotaSchema, AccountSummarySchema, AccountUsageSchema } from "@/features/accounts/schemas";
 import type { AccountSummary } from "@/features/accounts/schemas";
