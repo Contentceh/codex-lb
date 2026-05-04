@@ -21,4 +21,4 @@ Direct platform Images API calls are not a reliable substitute for ChatGPT Plus/
 - `gpt-image-*` becomes a first-class public model family for image routing, API-key allowed-model checks, model-scoped request limits, request logs, pricing, and usage summaries.
 - Existing account routing and Responses proxy behavior are reused rather than bypassed.
 - The public Images surface does not leak the internal host model used to run the Responses `image_generation` tool.
-- Existing `/v1/responses`, `/v1/chat/completions`, `/v1/audio/transcriptions`, `/v1/models`, request-log, usage, and API-key behavior remain unchanged outside the image adapter path.
+- Existing `/v1/responses`, `/v1/responses/compact`, `/v1/chat/completions`, `/v1/audio/transcriptions`, `/v1/models`, request-log, usage, and API-key behavior remain unchanged outside the image adapter path. In particular, direct Responses built-in-tool traffic still uses Responses envelopes, compact still strips tool fields, and Chat Completions still rejects unsupported built-in tools such as `image_generation`.

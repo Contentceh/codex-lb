@@ -89,6 +89,7 @@ Includes:
 - Port PR #498 as a separable patch source from `upstream/pr/498` / `v1.15.0...upstream/pr/498`.
 - Add OpenAI Images request/response schemas, strict validation, and `gpt-image-*` parameter rules.
 - Add `/v1/images/generations` and `/v1/images/edits` as a translation layer over internal Responses `image_generation` tool calls.
+- Keep the image adapter boundary narrow: direct `/v1/responses` built-in-tool behavior, `/v1/responses/compact` tool stripping, and `/v1/chat/completions` unsupported-tool rejection stay unchanged outside `/v1/images/*`.
 - Keep `/v1/images/variations` explicitly unsupported.
 - Force safer HTTP/SSE upstream transport for image-generation tool traffic when auto transport would otherwise choose websocket.
 - Apply API-key allowed-model policy, request reservations, request logs, usage summaries, and pricing against the public `gpt-image-*` model, not the hidden host model.

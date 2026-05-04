@@ -24,3 +24,23 @@ When `stream=true`, the service MUST respond with `text/event-stream` and emit O
 - **WHEN** upstream closes or fails the stream with `stream_incomplete`
 - **AND** retry budget is exhausted or the stream already emitted text deltas
 - **THEN** the service emits or forwards `response.failed` with error code `stream_incomplete` and closes the stream
+
+
+### Requirement: Direct Responses built-in-tool behavior remains independent from Images API adapter
+
+The service MUST keep direct `/v1/responses`, `/v1/responses/compact`, and `/v1/chat/completions` compatibility behavior unchanged when adding the OpenAI Images adapter. Direct `/v1/responses` requests MAY continue to carry built-in Responses tools such as `image_generation` through the existing Responses proxy path. Compact routes MUST continue to strip tool-related fields before upstream compaction. Chat Completions MUST continue to reject unsupported built-in tool types, including `image_generation`, except for its existing `web_search` / `web_search_preview` normalization. The `/v1/images/generations` and `/v1/images/edits` routes are the only public OpenAI Images adapter boundary that constructs an internal Responses request with `tools: [{"type": "image_generation"}]`.
+
+#### Scenario: Direct v1 Responses image_generation tool still uses Responses semantics
+
+- **WHEN** a client sends `POST /v1/responses` with a built-in `image_generation` tool
+- **THEN** the service forwards that request through the normal Responses proxy behavior and does not translate it into OpenAI Images response envelopes or `image_generation.completed` Images stream events
+
+#### Scenario: Compact routes keep stripping tool fields
+
+- **WHEN** a client sends `/v1/responses/compact` or `/backend-api/codex/responses/compact` with `tools`, `tool_choice`, or `parallel_tool_calls` containing `image_generation`
+- **THEN** the compact upstream payload omits those tool-related fields and preserves the compact endpoint contract
+
+#### Scenario: Chat Completions still rejects unsupported built-in image_generation tools
+
+- **WHEN** a client sends `POST /v1/chat/completions` with `tools: [{"type": "image_generation"}]`
+- **THEN** the service returns an OpenAI `invalid_request_error` for the unsupported tool type rather than invoking the Images adapter

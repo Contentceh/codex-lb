@@ -50,7 +50,7 @@ The system SHALL expose `POST /v1/images/edits` and accept the OpenAI Images Edi
 
 ### Requirement: Image generation is implemented as a Responses tool adapter
 
-The system SHALL implement `/v1/images/generations` and `/v1/images/edits` by issuing an internal Responses request whose `tools` array includes `{"type": "image_generation", ...}` and whose input is constructed to deterministically force a single `image_generation` tool call. The system MUST route that internal request through the existing proxy account-selection, sticky-session, retry, authentication, rate-limit header, and request-limit pipeline. The system MUST NOT introduce a ChatGPT-token to platform-API-key token-exchange path solely to support these endpoints.
+The system SHALL implement `/v1/images/generations` and `/v1/images/edits` by issuing an internal Responses request whose `tools` array includes `{"type": "image_generation", ...}` and whose input is constructed to deterministically force a single `image_generation` tool call. The system MUST route that internal request through the existing proxy account-selection, sticky-session, retry, authentication, rate-limit header, and request-limit pipeline. The system MUST NOT introduce a ChatGPT-token to platform-API-key token-exchange path solely to support these endpoints. The adapter MUST be reachable only through `/v1/images/*` and MUST NOT change direct `/v1/responses`, `/v1/responses/compact`, or `/v1/chat/completions` compatibility semantics.
 
 #### Scenario: Internal Responses call uses existing routing
 
