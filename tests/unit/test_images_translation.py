@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import base64
-from collections.abc import Mapping
+import json
+from collections.abc import AsyncIterator, Mapping
 from typing import Any, cast
 
 import pytest
@@ -442,3 +443,503 @@ class TestImagesResponseFromResponses:
         assert dumped["total_tokens"] == 12
         assert dumped["input_tokens_details"] == {"cached_tokens": 2}
         assert dumped["future_counter"] == 99
+
+
+# ---------------------------------------------------------------------------
+# SSE translation
+# ---------------------------------------------------------------------------
+
+
+def _sse(payload: dict[str, object]) -> str:
+    return f"event: {payload['type']}\ndata: {json.dumps(payload)}\n\n"
+
+
+async def _stream(events: list[str]) -> AsyncIterator[str]:
+    for event in events:
+        yield event
+
+
+def _events_from_translated_stream(blocks: list[str]) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    for block in blocks:
+        if not block.strip():
+            continue
+        if block.strip() == "data: [DONE]":
+            events.append({"type": "[DONE]"})
+            continue
+        for line in block.splitlines():
+            if line.startswith("data: "):
+                events.append(json.loads(line[6:]))
+                break
+    return events
+
+
+class TestTranslateResponsesStreamToImagesStream:
+    @pytest.mark.asyncio
+    async def test_partial_then_completed_produces_canonical_events(self) -> None:
+        upstream_events = [
+            _sse({"type": "response.created", "response": {"id": "resp_x"}}),
+            _sse({"type": "response.in_progress"}),
+            _sse({"type": "response.output_item.added", "item": {"type": "reasoning"}}),
+            _sse(
+                {
+                    "type": "response.image_generation_call.partial_image",
+                    "partial_image_b64": "PARTIAL_0",
+                    "partial_image_index": 0,
+                    "size": "1024x1024",
+                    "quality": "low",
+                    "background": "auto",
+                    "output_format": "png",
+                    "output_index": 1,
+                    "sequence_number": 7,
+                    "item_id": "ig_1",
+                }
+            ),
+            _sse(
+                {
+                    "type": "response.image_generation_call.partial_image",
+                    "partial_image_b64": "PARTIAL_1",
+                    "partial_image_index": 1,
+                    "size": "1024x1024",
+                    "quality": "low",
+                    "background": "auto",
+                    "output_format": "png",
+                    "output_index": 1,
+                }
+            ),
+            _sse(
+                {
+                    "type": "response.output_item.done",
+                    "output_index": 1,
+                    "item": {
+                        "type": "image_generation_call",
+                        "id": "ig_1",
+                        "status": "completed",
+                        "result": "FINAL_B64",
+                        "revised_prompt": "tiny red circle",
+                        "size": "1024x1024",
+                        "quality": "low",
+                        "background": "auto",
+                        "output_format": "png",
+                    },
+                }
+            ),
+            _sse(
+                {
+                    "type": "response.completed",
+                    "response": {"id": "resp_x", "tool_usage": {"image_gen": {"input_tokens": 1, "output_tokens": 2}}},
+                }
+            ),
+        ]
+
+        translated_blocks = [
+            block
+            async for block in images_service.translate_responses_stream_to_images_stream(_stream(upstream_events))
+        ]
+
+        events = _events_from_translated_stream(translated_blocks)
+        assert [e["type"] for e in events] == [
+            "image_generation.partial_image",
+            "image_generation.partial_image",
+            "image_generation.completed",
+            "[DONE]",
+        ]
+        assert events[0]["b64_json"] == "PARTIAL_0"
+        assert events[0]["partial_image_index"] == 0
+        assert events[0]["size"] == "1024x1024"
+        assert "sequence_number" not in events[0]
+        assert "item_id" not in events[0]
+        assert events[1]["b64_json"] == "PARTIAL_1"
+        assert events[2]["b64_json"] == "FINAL_B64"
+        assert events[2]["revised_prompt"] == "tiny red circle"
+        assert events[2]["usage"] == {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3}
+
+    @pytest.mark.asyncio
+    async def test_response_failed_yields_single_error_event(self) -> None:
+        upstream_events = [
+            _sse({"type": "response.created", "response": {"id": "resp_y"}}),
+            _sse(
+                {
+                    "type": "response.failed",
+                    "response": {
+                        "error": {
+                            "code": "rate_limit_exceeded",
+                            "message": "too many",
+                            "type": "rate_limit_error",
+                        }
+                    },
+                }
+            ),
+        ]
+
+        translated_blocks = [
+            block
+            async for block in images_service.translate_responses_stream_to_images_stream(_stream(upstream_events))
+        ]
+
+        events = _events_from_translated_stream(translated_blocks)
+        assert [e["type"] for e in events] == ["error", "[DONE]"]
+        assert events[0]["error"]["code"] == "rate_limit_exceeded"
+        assert events[0]["error"]["message"] == "too many"
+        assert events[0]["error"]["type"] == "rate_limit_error"
+
+    @pytest.mark.asyncio
+    async def test_failed_image_generation_call_yields_error(self) -> None:
+        upstream_events = [
+            _sse(
+                {
+                    "type": "response.output_item.done",
+                    "item": {
+                        "type": "image_generation_call",
+                        "status": "failed",
+                        "error": {
+                            "code": "content_policy_violation",
+                            "message": "blocked",
+                            "type": "invalid_request_error",
+                        },
+                    },
+                }
+            ),
+            _sse({"type": "response.completed", "response": {}}),
+        ]
+
+        translated_blocks = [
+            block
+            async for block in images_service.translate_responses_stream_to_images_stream(_stream(upstream_events))
+        ]
+
+        events = _events_from_translated_stream(translated_blocks)
+        assert [e["type"] for e in events] == ["error", "[DONE]"]
+        assert events[0]["error"]["code"] == "content_policy_violation"
+
+    @pytest.mark.asyncio
+    async def test_response_incomplete_yields_error(self) -> None:
+        upstream_events = [_sse({"type": "response.incomplete", "response": {"id": "resp_inc"}})]
+
+        translated_blocks = [
+            block
+            async for block in images_service.translate_responses_stream_to_images_stream(_stream(upstream_events))
+        ]
+
+        events = _events_from_translated_stream(translated_blocks)
+        assert [e["type"] for e in events] == ["error", "[DONE]"]
+        assert events[0]["error"]["code"] == "image_generation_failed"
+
+    @pytest.mark.asyncio
+    async def test_truncated_stream_emits_synthetic_error(self) -> None:
+        translated_blocks = [
+            block async for block in images_service.translate_responses_stream_to_images_stream(_stream([]))
+        ]
+
+        events = _events_from_translated_stream(translated_blocks)
+        assert [e["type"] for e in events] == ["error", "[DONE]"]
+        assert events[0]["error"]["code"] == "image_generation_failed"
+
+    @pytest.mark.asyncio
+    async def test_error_event_passes_through(self) -> None:
+        upstream_events = [
+            _sse(
+                {
+                    "type": "error",
+                    "error": {
+                        "code": "server_error",
+                        "message": "boom",
+                        "type": "server_error",
+                    },
+                }
+            ),
+        ]
+
+        translated_blocks = [
+            block
+            async for block in images_service.translate_responses_stream_to_images_stream(_stream(upstream_events))
+        ]
+
+        events = _events_from_translated_stream(translated_blocks)
+        assert [e["type"] for e in events] == ["error", "[DONE]"]
+        assert events[0]["error"]["code"] == "server_error"
+
+    @pytest.mark.asyncio
+    async def test_multiple_completed_image_items_are_all_emitted(self) -> None:
+        upstream_events = [
+            _sse({"type": "response.created", "response": {"id": "resp_multi"}}),
+            _sse(
+                {
+                    "type": "response.output_item.done",
+                    "output_index": 0,
+                    "item": {"type": "image_generation_call", "status": "completed", "result": "FIRST_B64"},
+                }
+            ),
+            _sse(
+                {
+                    "type": "response.output_item.done",
+                    "output_index": 1,
+                    "item": {"type": "image_generation_call", "status": "completed", "result": "SECOND_B64"},
+                }
+            ),
+            _sse(
+                {
+                    "type": "response.completed",
+                    "response": {
+                        "id": "resp_multi",
+                        "tool_usage": {"image_gen": {"input_tokens": 3, "output_tokens": 11}},
+                    },
+                }
+            ),
+        ]
+
+        translated_blocks = [
+            block
+            async for block in images_service.translate_responses_stream_to_images_stream(_stream(upstream_events))
+        ]
+
+        events = _events_from_translated_stream(translated_blocks)
+        completed = [e for e in events if e["type"] == "image_generation.completed"]
+        assert [e["b64_json"] for e in completed] == ["FIRST_B64", "SECOND_B64"]
+        assert "usage" not in completed[0]
+        assert completed[1]["usage"]["input_tokens"] == 3
+        assert completed[1]["usage"]["output_tokens"] == 11
+
+    @pytest.mark.asyncio
+    async def test_emits_image_edit_events_when_is_edit_true(self) -> None:
+        upstream_events = [
+            _sse(
+                {
+                    "type": "response.image_generation_call.partial_image",
+                    "partial_image_b64": "EDITPARTIAL",
+                    "partial_image_index": 0,
+                }
+            ),
+            _sse(
+                {
+                    "type": "response.output_item.done",
+                    "item": {"type": "image_generation_call", "status": "completed", "result": "EDITFINAL"},
+                }
+            ),
+            _sse({"type": "response.completed", "response": {"id": "resp_e"}}),
+        ]
+
+        translated_blocks = [
+            block
+            async for block in images_service.translate_responses_stream_to_images_stream(
+                _stream(upstream_events), is_edit=True
+            )
+        ]
+
+        events = _events_from_translated_stream(translated_blocks)
+        types = [e["type"] for e in events]
+        assert "image_edit.partial_image" in types
+        assert "image_edit.completed" in types
+        assert not any(t.startswith("image_generation.") for t in types)
+
+    @pytest.mark.asyncio
+    async def test_created_at_is_synthesized_for_stream_events(self) -> None:
+        upstream_events = [
+            _sse(
+                {
+                    "type": "response.image_generation_call.partial_image",
+                    "partial_image_b64": "PB64",
+                    "partial_image_index": 0,
+                }
+            ),
+            _sse(
+                {
+                    "type": "response.output_item.done",
+                    "item": {"type": "image_generation_call", "status": "completed", "result": "DONE_B64"},
+                }
+            ),
+            _sse({"type": "response.completed", "response": {"id": "resp_t"}}),
+        ]
+
+        translated_blocks = [
+            block
+            async for block in images_service.translate_responses_stream_to_images_stream(_stream(upstream_events))
+        ]
+
+        events = _events_from_translated_stream(translated_blocks)
+        for event in events:
+            if event["type"] in ("image_generation.partial_image", "image_generation.completed"):
+                assert isinstance(event.get("created_at"), int) and event["created_at"] > 0
+
+    @pytest.mark.asyncio
+    async def test_translate_populates_captured_response_id_and_usage_tokens(self) -> None:
+        upstream_events = [
+            _sse({"type": "response.created", "response": {"id": "resp_stream_id"}}),
+            _sse(
+                {
+                    "type": "response.output_item.done",
+                    "item": {"type": "image_generation_call", "status": "completed", "result": "BBBB"},
+                }
+            ),
+            _sse(
+                {
+                    "type": "response.completed",
+                    "response": {
+                        "id": "resp_stream_id",
+                        "tool_usage": {
+                            "image_gen": {
+                                "input_tokens": 5,
+                                "output_tokens": 7,
+                                "input_tokens_details": {"cached_tokens": 2},
+                            }
+                        },
+                    },
+                }
+            ),
+        ]
+        captured: dict[str, object] = {}
+
+        translated_blocks = [
+            block
+            async for block in images_service.translate_responses_stream_to_images_stream(
+                _stream(upstream_events), captured=captured
+            )
+        ]
+
+        assert captured == {
+            "response_id": "resp_stream_id",
+            "image_input_tokens": 5,
+            "image_output_tokens": 7,
+            "image_cached_input_tokens": 2,
+        }
+        events = _events_from_translated_stream(translated_blocks)
+        assert any(e["type"] == "image_generation.completed" for e in events)
+
+
+class TestCollectResponsesStreamForImages:
+    @pytest.mark.asyncio
+    async def test_completed_returns_response_with_merged_output(self) -> None:
+        upstream_events = [
+            _sse(
+                {
+                    "type": "response.output_item.done",
+                    "output_index": 0,
+                    "item": {"type": "image_generation_call", "status": "completed", "result": "ABC"},
+                }
+            ),
+            _sse(
+                {
+                    "type": "response.completed",
+                    "response": {
+                        "id": "resp_z",
+                        "tool_usage": {"image_gen": {"input_tokens": 4, "output_tokens": 6}},
+                    },
+                }
+            ),
+        ]
+
+        response, error = await images_service.collect_responses_stream_for_images(_stream(upstream_events))
+
+        assert error is None
+        assert response is not None
+        assert response["id"] == "resp_z"
+        output = cast(list[JsonValue], response["output"])
+        first_item = cast(Mapping[str, JsonValue], output[0])
+        assert first_item["result"] == "ABC"
+        tool_usage = cast(Mapping[str, JsonValue], response["tool_usage"])
+        image_gen = cast(Mapping[str, JsonValue], tool_usage["image_gen"])
+        assert image_gen["output_tokens"] == 6
+
+    @pytest.mark.asyncio
+    async def test_response_incomplete_returns_error_envelope(self) -> None:
+        upstream_events = [
+            _sse({"type": "response.incomplete", "response": {"id": "resp_inc", "status": "incomplete"}})
+        ]
+
+        response, error = await images_service.collect_responses_stream_for_images(_stream(upstream_events))
+
+        assert response is None
+        assert error is not None
+        assert error["error"]["code"] == "image_generation_failed"
+
+    @pytest.mark.asyncio
+    async def test_late_failed_after_completed_is_ignored(self) -> None:
+        upstream_events = [
+            _sse(
+                {
+                    "type": "response.output_item.done",
+                    "output_index": 0,
+                    "item": {"type": "image_generation_call", "status": "completed", "result": "GOODB64"},
+                }
+            ),
+            _sse({"type": "response.completed", "response": {"id": "resp_late"}}),
+            _sse({"type": "response.failed", "response": {"error": {"code": "transport_error", "message": "late"}}}),
+        ]
+
+        response, error = await images_service.collect_responses_stream_for_images(_stream(upstream_events))
+
+        assert error is None
+        assert response is not None
+        assert response["id"] == "resp_late"
+
+    @pytest.mark.asyncio
+    async def test_response_failed_returns_error_envelope(self) -> None:
+        upstream_events = [
+            _sse(
+                {
+                    "type": "response.failed",
+                    "response": {
+                        "error": {
+                            "code": "rate_limit_exceeded",
+                            "message": "slow down",
+                            "type": "rate_limit_error",
+                        }
+                    },
+                }
+            ),
+        ]
+
+        response, error = await images_service.collect_responses_stream_for_images(_stream(upstream_events))
+
+        assert response is None
+        assert error is not None
+        assert error["error"]["code"] == "rate_limit_exceeded"
+
+    @pytest.mark.asyncio
+    async def test_error_event_returns_error_envelope(self) -> None:
+        upstream_events = [_sse({"type": "error", "error": {"code": "server_error", "message": "boom"}})]
+
+        response, error = await images_service.collect_responses_stream_for_images(_stream(upstream_events))
+
+        assert response is None
+        assert error is not None
+        assert error["error"]["code"] == "server_error"
+
+    @pytest.mark.asyncio
+    async def test_truncated_stream_returns_error(self) -> None:
+        response, error = await images_service.collect_responses_stream_for_images(_stream([]))
+
+        assert response is None
+        assert error is not None
+        assert error["error"]["code"] == "image_generation_failed"
+
+    @pytest.mark.asyncio
+    async def test_captured_response_id_and_usage_populated_during_collect(self) -> None:
+        upstream_events = [
+            _sse({"type": "response.created", "response": {"id": "resp_collect_id"}}),
+            _sse(
+                {
+                    "type": "response.output_item.done",
+                    "output_index": 0,
+                    "item": {"type": "image_generation_call", "id": "ig_xx", "status": "completed", "result": "AAAA"},
+                }
+            ),
+            _sse(
+                {
+                    "type": "response.completed",
+                    "response": {
+                        "id": "resp_collect_id",
+                        "tool_usage": {"image_gen": {"input_tokens": 2, "output_tokens": 3}},
+                    },
+                }
+            ),
+        ]
+        captured: dict[str, object] = {}
+
+        response, error = await images_service.collect_responses_stream_for_images(
+            _stream(upstream_events), captured=captured
+        )
+
+        assert error is None
+        assert response is not None
+        assert captured == {"response_id": "resp_collect_id", "image_input_tokens": 2, "image_output_tokens": 3}
