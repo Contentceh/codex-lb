@@ -5,12 +5,14 @@ import base64
 import json
 
 import pytest
+from sqlalchemy import select
 
 import app.modules.proxy.service as proxy_module
 from app.core.auth import generate_unique_account_id
 from app.core.clients.proxy import ProxyResponseError
 from app.core.utils.sse import format_sse_event
 from app.core.utils.time import utcnow
+from app.db.models import RequestLog
 from app.db.session import SessionLocal
 from app.modules.proxy.rate_limit_cache import get_rate_limit_headers_cache
 from app.modules.usage.repository import UsageRepository
@@ -150,6 +152,55 @@ async def test_v1_images_generations_streams_image_events(async_client, monkeypa
     assert payloads[-1]["b64_json"] == "ZmFrZS1wbmc="
     assert payloads[-1]["usage"] == {"input_tokens": 11, "output_tokens": 7, "total_tokens": 18}
     assert lines[-1] == "data: [DONE]"
+
+
+@pytest.mark.asyncio
+async def test_v1_images_generations_logs_public_model(async_client, monkeypatch):
+    await _import_proxy_account(async_client, account_id="acc_img_log", email="image-log@example.com")
+
+    async def fake_stream(payload, headers, access_token, account_id, base_url=None, raise_for_status=False, **kwargs):
+        del headers, access_token, account_id, base_url, raise_for_status, kwargs
+        assert payload.model == "gpt-5.5"
+        for event in _completed_image_stream("resp_img_log"):
+            yield event
+
+    monkeypatch.setattr(proxy_module, "core_stream_responses", fake_stream)
+
+    response = await async_client.post(
+        "/v1/images/generations",
+        json={"model": "gpt-image-2", "prompt": "paint a crab"},
+    )
+
+    assert response.status_code == 200
+    async with SessionLocal() as session:
+        result = await session.execute(select(RequestLog).where(RequestLog.request_id == "resp_img_log"))
+        log = result.scalar_one()
+    assert log.model == "gpt-image-2"
+
+
+@pytest.mark.asyncio
+async def test_v1_images_edits_logs_public_model(async_client, monkeypatch):
+    await _import_proxy_account(async_client, account_id="acc_img_edit_log", email="image-edit-log@example.com")
+
+    async def fake_stream(payload, headers, access_token, account_id, base_url=None, raise_for_status=False, **kwargs):
+        del headers, access_token, account_id, base_url, raise_for_status, kwargs
+        assert payload.model == "gpt-5.5"
+        for event in _completed_image_stream("resp_img_edit_log"):
+            yield event
+
+    monkeypatch.setattr(proxy_module, "core_stream_responses", fake_stream)
+
+    response = await async_client.post(
+        "/v1/images/edits",
+        files={"image": ("crab.png", b"fake-png", "image/png")},
+        data={"model": "gpt-image-1", "prompt": "paint it blue"},
+    )
+
+    assert response.status_code == 200
+    async with SessionLocal() as session:
+        result = await session.execute(select(RequestLog).where(RequestLog.request_id == "resp_img_edit_log"))
+        log = result.scalar_one()
+    assert log.model == "gpt-image-1"
 
 
 @pytest.mark.asyncio

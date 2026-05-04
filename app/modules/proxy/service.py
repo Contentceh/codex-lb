@@ -305,6 +305,7 @@ class ProxyService:
         api_key_reservation: ApiKeyUsageReservationData | None = None,
         suppress_text_done_events: bool = False,
         request_transport: str = _REQUEST_TRANSPORT_HTTP,
+        request_log_model: str | None = None,
     ) -> AsyncIterator[str]:
         _maybe_log_proxy_request_payload("stream", payload, headers)
         filtered = filter_inbound_headers(headers)
@@ -318,6 +319,7 @@ class ProxyService:
             api_key_reservation=api_key_reservation,
             suppress_text_done_events=suppress_text_done_events,
             request_transport=request_transport,
+            request_log_model=request_log_model,
         )
 
     def stream_http_responses(
@@ -6348,6 +6350,7 @@ class ProxyService:
         api_key_reservation: ApiKeyUsageReservationData | None,
         suppress_text_done_events: bool,
         request_transport: str,
+        request_log_model: str | None,
     ) -> AsyncIterator[str]:
         request_id = ensure_request_id()
         start = time.monotonic()
@@ -6356,6 +6359,7 @@ class ProxyService:
         deadline = start + base_settings.proxy_request_budget_seconds
         prefer_earlier_reset = settings.prefer_earlier_reset_accounts
         upstream_stream_transport = _resolve_upstream_stream_transport(settings.upstream_stream_transport)
+        log_model = request_log_model or payload.model
         had_prompt_cache_key = _prompt_cache_key_from_request_model(payload) is not None
         affinity = _sticky_key_for_responses_request(
             payload,
@@ -6409,7 +6413,7 @@ class ProxyService:
                         account_id=None,
                         api_key=api_key,
                         request_id=request_id,
-                        model=payload.model,
+                        model=log_model,
                         start=start,
                         error_code="upstream_request_timeout",
                         error_message="Proxy request budget exhausted",
@@ -6444,7 +6448,7 @@ class ProxyService:
                             account_id=None,
                             api_key=api_key,
                             request_id=request_id,
-                            model=payload.model,
+                            model=log_model,
                             start=start,
                             error_code="upstream_request_timeout",
                             error_message="Proxy request budget exhausted",
@@ -6484,7 +6488,7 @@ class ProxyService:
                             account_id=preferred_account_id,
                             api_key=api_key,
                             request_id=request_id,
-                            model=payload.model,
+                            model=log_model,
                             latency_ms=int((time.monotonic() - start) * 1000),
                             status="error",
                             error_code="upstream_unavailable",
@@ -6512,7 +6516,7 @@ class ProxyService:
                         account_id=None,
                         api_key=api_key,
                         request_id=request_id,
-                        model=payload.model,
+                        model=log_model,
                         latency_ms=int((time.monotonic() - start) * 1000),
                         status="error",
                         error_code=error_code,
@@ -6548,7 +6552,7 @@ class ProxyService:
                         account_id=preferred_account_id,
                         api_key=api_key,
                         request_id=request_id,
-                        model=payload.model,
+                        model=log_model,
                         latency_ms=int((time.monotonic() - start) * 1000),
                         status="error",
                         error_code="upstream_unavailable",
@@ -6573,7 +6577,7 @@ class ProxyService:
                             account_id=account.id,
                             api_key=api_key,
                             request_id=request_id,
-                            model=payload.model,
+                            model=log_model,
                             start=start,
                             error_code="upstream_request_timeout",
                             error_message="Proxy request budget exhausted",
@@ -6598,7 +6602,7 @@ class ProxyService:
                             account_id=account.id,
                             api_key=api_key,
                             request_id=request_id,
-                            model=payload.model,
+                            model=log_model,
                             start=start,
                             error_code="upstream_unavailable",
                             error_message=message,
@@ -6628,7 +6632,7 @@ class ProxyService:
                             account_id=account.id,
                             api_key=api_key,
                             request_id=request_id,
-                            model=payload.model,
+                            model=log_model,
                             start=start,
                             error_code="upstream_request_timeout",
                             error_message="Proxy request budget exhausted",
@@ -6661,6 +6665,7 @@ class ProxyService:
                                 suppress_text_done_events=suppress_text_done_events,
                                 upstream_stream_transport=upstream_stream_transport,
                                 request_transport=request_transport,
+                                request_log_model=log_model,
                                 preferred_account_id=preferred_account_id,
                             ):
                                 yield line
@@ -6783,7 +6788,7 @@ class ProxyService:
                                 account_id=account.id,
                                 api_key=api_key,
                                 request_id=request_id,
-                                model=payload.model,
+                                model=log_model,
                                 start=start,
                                 error_code="upstream_request_timeout",
                                 error_message="Proxy request budget exhausted",
@@ -6816,7 +6821,7 @@ class ProxyService:
                                 account_id=account.id,
                                 api_key=api_key,
                                 request_id=request_id,
-                                model=payload.model,
+                                model=log_model,
                                 start=start,
                                 error_code="upstream_unavailable",
                                 error_message=message,
@@ -6845,7 +6850,7 @@ class ProxyService:
                                 account_id=account.id,
                                 api_key=api_key,
                                 request_id=request_id,
-                                model=payload.model,
+                                model=log_model,
                                 start=start,
                                 error_code="upstream_request_timeout",
                                 error_message="Proxy request budget exhausted",
@@ -6869,6 +6874,7 @@ class ProxyService:
                                 suppress_text_done_events=suppress_text_done_events,
                                 upstream_stream_transport=upstream_stream_transport,
                                 request_transport=request_transport,
+                                request_log_model=log_model,
                             ):
                                 yield line
                         finally:
@@ -6945,7 +6951,7 @@ class ProxyService:
                     account_id=None,
                     api_key=api_key,
                     request_id=request_id,
-                    model=payload.model,
+                    model=log_model,
                     latency_ms=int((time.monotonic() - start) * 1000),
                     status="error",
                     error_code="no_accounts",
@@ -6987,12 +6993,14 @@ class ProxyService:
         suppress_text_done_events: bool,
         upstream_stream_transport: str | None,
         request_transport: str,
+        request_log_model: str | None = None,
         preferred_account_id: str | None = None,
     ) -> AsyncIterator[str]:
         account_id_value = account.id
         access_token = self._encryptor.decrypt(account.access_token_encrypted)
         account_id = _header_account_id(account.chatgpt_account_id)
         model = payload.model
+        log_model = request_log_model or model
         requested_service_tier = payload.service_tier
         service_tier = requested_service_tier
         actual_service_tier: str | None = None
@@ -7258,7 +7266,7 @@ class ProxyService:
                 usage.output_tokens_details.reasoning_tokens if usage and usage.output_tokens_details else None
             )
             settlement.status = status
-            settlement.model = model
+            settlement.model = log_model
             settlement.service_tier = service_tier
             settlement.input_tokens = input_tokens
             settlement.output_tokens = output_tokens
@@ -7269,7 +7277,7 @@ class ProxyService:
                 account_id=account_id_value,
                 api_key=api_key,
                 request_id=response_id,
-                model=model,
+                model=log_model,
                 latency_ms=int((time.monotonic() - start) * 1000),
                 status=status,
                 error_code=error_code,

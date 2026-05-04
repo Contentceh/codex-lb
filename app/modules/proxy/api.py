@@ -314,6 +314,7 @@ async def v1_images_generations(
         openai_cache_affinity=True,
         api_key=api_key,
         api_key_reservation=reservation,
+        request_log_model=image_payload.model,
     )
 
     if image_payload.stream:
@@ -449,6 +450,7 @@ async def v1_images_edits(
             openai_cache_affinity=True,
             api_key=api_key,
             api_key_reservation=reservation,
+            request_log_model=image_payload.model,
         )
 
         if image_payload.stream:
