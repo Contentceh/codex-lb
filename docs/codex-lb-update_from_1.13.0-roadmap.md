@@ -26,6 +26,7 @@ Upgrade the current `codex-lb` deployment from the local 1.13.0-derived state to
 - Sprint 3 implementation checklist completed at `docs/codex-lb-update_from_1.13.0-sprint3-checklist.md`; evidence is recorded in `/home/vgoro/codex-lb-backups/20260504-074350/sprint3/sprint3-evidence.md`, with no live Docker cutover and no real image-generation smoke until Sprint 4.
 - Sprint 4 live-smoke checklist completed at `docs/codex-lb-update_from_1.13.0-sprint4-checklist.md`; evidence is recorded in `/home/vgoro/codex-lb-backups/20260504-211500/sprint4/sprint4-evidence.md`; final docs/evidence commit is `dd55523 docs(upgrade): complete sprint 4 evidence`.
 - As of Sprint 5 planning, `git ls-remote --tags upstream 'refs/tags/v1.16*'` returns no upstream `v1.16` tag. Sprint 5 therefore starts with release-watch, upstream-delta, and branch-policy readiness work before any 1.16 candidate cutover.
+- Sprint 5 readiness/evidence work is completed in commit `9d07f1d docs(upgrade): capture sprint 5 evidence`; `release_availability_gate=BLOCKED` remains the explicit upstream-release blocker for any separate future 1.16 cutover sprint.
 
 ## Non-negotiable constraints
 
@@ -126,7 +127,7 @@ Exit criteria:
 - Text/model proxy surfaces remain healthy after image traffic.
 - Runtime settings, evidence, and rollback are documented with no secrets committed.
 
-### [ ] Sprint 5 — 1.16 readiness and upstream alignment
+### [x] Sprint 5 — 1.16 readiness and upstream alignment
 
 Purpose: reduce the long-term fork burden of the live `1.15.0` + PR #498 image branch by preparing a controlled path to upstream `1.16` as soon as an official upstream tag or release candidate exists.
 
@@ -145,11 +146,11 @@ Exit criteria:
 - The fork has a documented drop/rebase/retain decision matrix for PR #498 image patches and any local upgrade hotfixes.
 - Candidate branch and rollback rules preserve `localai_codex-lb-data`, account/session/settings data, OAuth/encryption material, and existing live service names.
 - Tests and linters required for a future 1.16 candidate are enumerated and, if a candidate ref exists, executed with logs captured in non-secret artifacts.
-- The roadmap clearly states whether Sprint 5 is complete, blocked on upstream release availability, or ready for a separate 1.16 cutover sprint.
+- Sprint 5 readiness/evidence work is complete. The future 1.16 cutover remains blocked on official upstream release availability and requires a separate operator-approved sprint.
 
 ## First sprint selected
 
-Sprint 1 — Upgrade foundation to upstream `v1.15.0`, Sprint 2 — Docker cutover and live 1.15.0 compatibility validation, Sprint 3 — Integrate PR #498 as an isolated image API patch, and Sprint 4 — gpt-image-2 hardening and live smoke are completed. Sprint 5 — 1.16 readiness and upstream alignment is selected next for detailed implementation planning. Because no upstream `v1.16*` tag is visible yet, Sprint 5 begins as release-watch, upstream-delta mapping, PR #498 retirement planning, and candidate-gate design; candidate branch/cutover tasks must wait for an official upstream ref and operator approval.
+Sprint 1 — Upgrade foundation to upstream `v1.15.0`, Sprint 2 — Docker cutover and live 1.15.0 compatibility validation, Sprint 3 — Integrate PR #498 as an isolated image API patch, Sprint 4 — gpt-image-2 hardening and live smoke, and Sprint 5 — 1.16 readiness and upstream alignment are completed. Because no upstream `v1.16*` tag is visible yet, the next 1.16 cutover candidate remains blocked until an official upstream ref exists and the operator approves a separate cutover sprint.
 
 ## Open risks
 
