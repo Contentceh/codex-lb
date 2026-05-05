@@ -24,6 +24,8 @@ Upgrade the current `codex-lb` deployment from the local 1.13.0-derived state to
 - Upstream `v1.15.0` includes important proxy fixes and GPT-5.5/GPT-5.5 Pro support, plus migrations for request log lookup and plan type metadata.
 - PR #498 is merged into upstream `main` but is not part of `v1.15.0`. It is available locally as `upstream/pr/498` for patch-source inspection. The `v1.15.0...upstream/pr/498` range touches `app/core/openai/images.py`, `app/core/openai/strict_schema.py`, `app/modules/proxy/images_service.py`, `app/modules/proxy/api.py`, `app/modules/proxy/service.py`, `app/core/clients/proxy.py`, `app/core/config/settings.py`, `app/core/usage/pricing.py`, `app/modules/request_logs/repository.py`, OpenSpec docs, and image/proxy tests. Keep this isolated so it can be dropped or rebased when upstream 1.16 lands.
 - Sprint 3 implementation checklist completed at `docs/codex-lb-update_from_1.13.0-sprint3-checklist.md`; evidence is recorded in `/home/vgoro/codex-lb-backups/20260504-074350/sprint3/sprint3-evidence.md`, with no live Docker cutover and no real image-generation smoke until Sprint 4.
+- Sprint 4 live-smoke checklist completed at `docs/codex-lb-update_from_1.13.0-sprint4-checklist.md`; evidence is recorded in `/home/vgoro/codex-lb-backups/20260504-211500/sprint4/sprint4-evidence.md`; final docs/evidence commit is `dd55523 docs(upgrade): complete sprint 4 evidence`.
+- As of Sprint 5 planning, `git ls-remote --tags upstream 'refs/tags/v1.16*'` returns no upstream `v1.16` tag. Sprint 5 therefore starts with release-watch, upstream-delta, and branch-policy readiness work before any 1.16 candidate cutover.
 
 ## Non-negotiable constraints
 
@@ -126,23 +128,28 @@ Exit criteria:
 
 ### [ ] Sprint 5 — 1.16 readiness and upstream alignment
 
-Purpose: minimize long-term fork burden once upstream 1.16 appears.
+Purpose: reduce the long-term fork burden of the live `1.15.0` + PR #498 image branch by preparing a controlled path to upstream `1.16` as soon as an official upstream tag or release candidate exists.
 
 Includes:
 
-- Track upstream release notes and compare `v1.15.0..v1.16.0` against the local image branch.
-- Decide whether to drop, rebase, or keep the PR #498 patch depending on upstream inclusion.
-- Re-run the 1.15.0 upgrade and image API quality gates against the 1.16 candidate.
-- Update deployment docs with the final chosen path.
+- Confirm upstream `v1.16*` release availability and record an explicit release-watch artifact if no tag is published yet.
+- Capture the current live branch/HEAD, Docker service names, compose strategy, and non-secret runtime baseline before any upstream-alignment branch work.
+- Compare the local `feature/pr-498-images-api-on-1.15.0` branch against `v1.15.0`, `upstream/pr/498`, and the latest `upstream/main`/`v1.16` candidate to identify duplicate, obsolete, and still-local patch chunks.
+- Decide whether PR #498-derived image work should be dropped, rebased, or retained when moving to `1.16`, with special attention to `/v1/images/*`, request logs, usage/cost accounting, API-key allowed-model policy, and the public/private model boundary.
+- Define the candidate branch, conflict-resolution rules, validation matrix, rollback path, and operator approval gates for a future 1.16 cutover.
+- When and only when an upstream `1.16` ref exists, rerun backend tests plus `ruff`, frontend lint/typecheck/test/build, Docker health checks, and conservative live smokes against the candidate.
 
 Exit criteria:
 
-- The local fork has a clear migration path to 1.16.
-- Any temporary PR #498 patch is either removed, rebased cleanly, or documented as intentionally retained.
+- A Sprint 5 evidence artifact states whether an upstream `v1.16` tag exists and records the exact refs inspected. Current release availability is BLOCKED: `release_availability_gate=BLOCKED` because `git ls-remote --tags upstream refs/tags/v1.16*` returned no refs in `/home/vgoro/codex-lb-backups/20260504-231326/sprint5/baseline/release-availability.txt`.
+- The fork has a documented drop/rebase/retain decision matrix for PR #498 image patches and any local upgrade hotfixes.
+- Candidate branch and rollback rules preserve `localai_codex-lb-data`, account/session/settings data, OAuth/encryption material, and existing live service names.
+- Tests and linters required for a future 1.16 candidate are enumerated and, if a candidate ref exists, executed with logs captured in non-secret artifacts.
+- The roadmap clearly states whether Sprint 5 is complete, blocked on upstream release availability, or ready for a separate 1.16 cutover sprint.
 
 ## First sprint selected
 
-Sprint 1 — Upgrade foundation to upstream `v1.15.0`, Sprint 2 — Docker cutover and live 1.15.0 compatibility validation, Sprint 3 — Integrate PR #498 as an isolated image API patch, and Sprint 4 — gpt-image-2 hardening and live smoke are completed. Sprint 5 — 1.16 readiness and upstream alignment is selected next for detailed implementation planning.
+Sprint 1 — Upgrade foundation to upstream `v1.15.0`, Sprint 2 — Docker cutover and live 1.15.0 compatibility validation, Sprint 3 — Integrate PR #498 as an isolated image API patch, and Sprint 4 — gpt-image-2 hardening and live smoke are completed. Sprint 5 — 1.16 readiness and upstream alignment is selected next for detailed implementation planning. Because no upstream `v1.16*` tag is visible yet, Sprint 5 begins as release-watch, upstream-delta mapping, PR #498 retirement planning, and candidate-gate design; candidate branch/cutover tasks must wait for an official upstream ref and operator approval.
 
 ## Open risks
 
@@ -151,3 +158,5 @@ Sprint 1 — Upgrade foundation to upstream `v1.15.0`, Sprint 2 — Docker cutov
 - PR #498 is large and touches proxy routing, request logs, OAuth/service behavior, and strict schema validation. It should not be mixed into the base 1.15.0 merge.
 - Image-generation Responses events can carry large base64 payloads; Sprint 3 must force HTTP/SSE where appropriate and keep websocket behavior unchanged for non-image traffic.
 - The internal image host model must never leak into public model policy, request logs, pricing, or `/v1/models`; use the public `gpt-image-*` value for external accounting.
+- No upstream `v1.16` tag is currently visible; do not invent a release target or perform a 1.16 cutover until an official upstream ref exists.
+- If upstream 1.16 includes PR #498 or an evolved image API implementation, duplicate local image patches can create route/schema/accounting conflicts unless the drop/rebase/retain decision is made before coding.
