@@ -27,7 +27,7 @@ The service MUST enforce role-specific message content rules: `system` and `deve
 - **THEN** the service accepts the request and forwards the content parts in order
 
 ### Requirement: Map chat requests to Responses wire format
-The service MUST map chat messages into the Responses request format by merging `system`/`developer` content into `instructions` and forwarding all other messages as `input`. Tool definitions MUST be normalized to the Responses tool schema, and `tool_choice`, `reasoning_effort`, and `response_format` MUST be mapped consistently. Unsupported fields MUST not be silently ignored if they change behavior.
+The service MUST map chat messages into the Responses request format by merging `system`/`developer` content into `instructions` and forwarding all other messages as `input`. Tool definitions MUST be normalized to the Responses tool schema, and `tool_choice`, `reasoning_effort`, and `response_format` MUST be mapped consistently. Chat-only metadata fields such as `metadata`, `modalities`, `prediction`, and `user` MUST NOT be forwarded into the upstream Responses payload.
 
 #### Scenario: System message normalization
 - **WHEN** the client sends a `system` message followed by a `user` message
@@ -36,6 +36,14 @@ The service MUST map chat messages into the Responses request format by merging 
 #### Scenario: Tool choice values
 - **WHEN** the client sets `tool_choice` to `none`, `auto`, or `required`
 - **THEN** the service forwards the value consistently in the mapped Responses request
+
+#### Scenario: Chat-only client metadata is stripped
+- **WHEN** a Chat Completions client sends optional chat metadata fields
+- **THEN** the mapped upstream Responses request omits those fields while preserving supported controls such as `service_tier`
+
+#### Scenario: Cursor-specific public alias is resolved
+- **WHEN** a Chat Completions client sends model `cursor-gpt-5.5`
+- **THEN** the service forwards the request upstream as model `gpt-5.5`
 
 ### Requirement: Preserve service_tier in Chat Completions mapping
 When a Chat Completions request includes `service_tier`, the service MUST preserve that field when mapping the request to the internal Responses payload.

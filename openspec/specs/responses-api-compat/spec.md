@@ -12,15 +12,21 @@ For OpenAI-style `/v1/responses`, `/v1/responses/compact`, and chat-completions 
 - **WHEN** an operator updates the dashboard prompt-cache affinity TTL
 - **THEN** subsequent OpenAI-style prompt-cache affinity decisions use the new freshness window
 
-### Requirement: Responses streaming incomplete retry behavior
-When `stream=true`, the service MUST respond with `text/event-stream` and emit OpenAI Responses streaming events. The stream MUST include a terminal event of `response.completed` or `response.failed`. If upstream emits or implies a `stream_incomplete` failure before any text delta reaches the client, the service MUST retry the stream while retry budget remains instead of forwarding that failure downstream immediately. After retry exhaustion, or after any text delta has been emitted, the service MUST emit or forward `response.failed` with the stable `stream_incomplete` error code and close the stream.
+### Requirement: Responses streaming transient retry behavior
+When `stream=true`, the service MUST retry transient upstream failures before any text delta reaches the client while retry budget remains. Transient failures include `stream_incomplete`, `server_error`, and upstream overload errors that say servers are overloaded or ask the client to try again later. The service MUST retry the same upstream account first and MUST NOT emit a downstream `response.failed` event for a failed pre-text transient attempt. After retry exhaustion, or after any text delta has been emitted, the service MUST emit or forward the terminal `response.failed` event and close the stream.
 
 #### Scenario: pre-text stream_incomplete retries without downstream failure
 - **WHEN** upstream fails a streaming response with `stream_incomplete` before any text delta
 - **AND** retry budget remains
 - **THEN** the service retries on the same account first without emitting a downstream `response.failed` event for the failed attempt
 
-#### Scenario: stream_incomplete after retry exhaustion is surfaced
+#### Scenario: pre-text upstream overload retries without downstream failure
+- **WHEN** upstream rejects a streaming response with a transient overload error before any text delta
+- **AND** the message says servers are overloaded or asks the client to try again later
+- **AND** retry budget remains
+- **THEN** the service retries on the same account first without emitting a downstream `response.failed` event for the failed attempt
+
+#### Scenario: transient failure after retry exhaustion is surfaced
 - **WHEN** upstream closes or fails the stream with `stream_incomplete`
 - **AND** retry budget is exhausted or the stream already emitted text deltas
 - **THEN** the service emits or forwards `response.failed` with error code `stream_incomplete` and closes the stream

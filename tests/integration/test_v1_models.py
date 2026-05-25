@@ -69,6 +69,19 @@ async def test_v1_models_list(async_client):
 
 
 @pytest.mark.asyncio
+async def test_v1_models_includes_cursor_alias_for_gpt_5_5(async_client):
+    registry = get_model_registry()
+    models = [_make_upstream_model("gpt-5.5")]
+    await registry.update({"plus": models, "pro": models})
+
+    resp = await async_client.get("/v1/models")
+    assert resp.status_code == 200
+    ids = {item["id"] for item in resp.json()["data"]}
+    assert "gpt-5.5" in ids
+    assert "cursor-gpt-5.5" in ids
+
+
+@pytest.mark.asyncio
 async def test_v1_models_empty_when_registry_not_populated(async_client):
     registry = get_model_registry()
     registry._snapshot = None

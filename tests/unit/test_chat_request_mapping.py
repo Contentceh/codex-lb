@@ -92,6 +92,39 @@ def test_chat_temperature_is_stripped_for_upstream_compat():
     assert "safety_identifier" not in dumped
 
 
+def test_chat_cursor_extra_fields_are_stripped_for_responses_routing():
+    payload = {
+        "model": "gpt-5.5",
+        "messages": [{"role": "user", "content": "hi"}],
+        "metadata": {"cursor": "agent"},
+        "modalities": ["text"],
+        "prediction": {"type": "content", "content": ""},
+        "user": "cursor-user",
+        "service_tier": "priority",
+    }
+    req = ChatCompletionsRequest.model_validate(payload)
+    responses = req.to_responses_request()
+    dumped = responses.to_payload()
+
+    assert dumped["model"] == "gpt-5.5"
+    assert dumped["service_tier"] == "priority"
+    assert "metadata" not in dumped
+    assert "modalities" not in dumped
+    assert "prediction" not in dumped
+    assert "user" not in dumped
+
+
+def test_chat_cursor_model_alias_maps_to_upstream_model():
+    payload = {
+        "model": "cursor-gpt-5.5",
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+    req = ChatCompletionsRequest.model_validate(payload)
+    responses = req.to_responses_request()
+
+    assert responses.model == "gpt-5.5"
+
+
 def test_chat_prompt_cache_controls_are_preserved():
     payload = {
         "model": "gpt-5.2",

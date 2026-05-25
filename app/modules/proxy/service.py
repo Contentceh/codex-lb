@@ -214,6 +214,10 @@ _ACCOUNT_RECOVERY_RETRY_CODES = frozenset(
     }
 )
 _TRANSIENT_RETRY_CODES = frozenset({"server_error", "stream_incomplete"})
+_TRANSIENT_RETRY_MESSAGE_HINTS = (
+    "servers are currently overloaded",
+    "please try again later",
+)
 _MAX_TRANSIENT_SAME_ACCOUNT_RETRIES = 3
 _COMPACT_MAX_ACCOUNT_ATTEMPTS = 2
 _STREAM_MAX_ACCOUNT_ATTEMPTS = 3
@@ -6671,7 +6675,7 @@ class ProxyService:
                             ):
                                 yield line
                         except (_TransientStreamError, ProxyResponseError) as tex:
-                            if isinstance(tex, ProxyResponseError) and tex.status_code != 500:
+                            if isinstance(tex, ProxyResponseError) and not _should_retry_transient_proxy_error(tex):
                                 error = _parse_openai_error(tex.payload)
                                 code = _normalize_error_code(
                                     error.code if error else None,
@@ -6708,7 +6712,10 @@ class ProxyService:
                                     break
                                 raise
                             transient_retries += 1
-                            error_code = tex.code if isinstance(tex, _TransientStreamError) else "server_error"
+                            if isinstance(tex, _TransientStreamError):
+                                error_code = tex.code
+                            else:
+                                error_code = _proxy_response_error_code(tex)
                             error_payload: UpstreamError = (
                                 tex.error
                                 if isinstance(tex, _TransientStreamError)
@@ -7099,7 +7106,10 @@ class ProxyService:
                     settlement.account_health_error = _should_penalize_stream_error(code)
                     if allow_retry and _should_retry_stream_error(code):
                         raise _RetryableStreamError(code, settlement.error)
-                    if allow_transient_retry and code in _TRANSIENT_RETRY_CODES:
+                    if allow_transient_retry and _should_retry_transient_stream_failure(
+                        code,
+                        error.message if error else None,
+                    ):
                         raise _TransientStreamError(code, settlement.error)
                 terminal_stream_error = _TerminalStreamError(
                     error_code or code,
@@ -7202,7 +7212,11 @@ class ProxyService:
                             settlement.error = _upstream_error_from_openai(error)
                             settlement.record_success = False
                             settlement.account_health_error = _should_penalize_stream_error(error_code)
-                            if allow_transient_retry and error_code in _TRANSIENT_RETRY_CODES and not saw_text_delta:
+                            if (
+                                allow_transient_retry
+                                and not saw_text_delta
+                                and _should_retry_transient_stream_failure(error_code, error_message)
+                            ):
                                 raise _TransientStreamError(error_code, settlement.error)
                     if event_type in ("response.completed", "response.incomplete"):
                         response = event.response if event is not None else None
@@ -9157,6 +9171,39 @@ def _proxy_request_timeout_event(request_id: str) -> ResponseFailedEvent:
 
 def _should_retry_stream_error(code: str) -> bool:
     return code in _ACCOUNT_RECOVERY_RETRY_CODES
+
+
+def _is_transient_retry_error_code(code: str | None) -> bool:
+    if code in _TRANSIENT_RETRY_CODES:
+        return True
+    return code == "upstream_error"
+
+
+def _is_transient_retry_message(message: str | None) -> bool:
+    if not isinstance(message, str):
+        return False
+    normalized = " ".join(message.lower().split())
+    return any(hint in normalized for hint in _TRANSIENT_RETRY_MESSAGE_HINTS)
+
+
+def _should_retry_transient_stream_failure(code: str | None, message: str | None) -> bool:
+    if code in _TRANSIENT_RETRY_CODES:
+        return True
+    return code == "upstream_error" and _is_transient_retry_message(message)
+
+
+def _should_retry_transient_proxy_error(exc: ProxyResponseError) -> bool:
+    if exc.status_code < 500:
+        return False
+    error = _parse_openai_error(exc.payload)
+    code = _normalize_error_code(error.code if error else None, error.type if error else None)
+    message = error.message if error else None
+    return _is_transient_retry_error_code(code) or _is_transient_retry_message(message)
+
+
+def _proxy_response_error_code(exc: ProxyResponseError) -> str:
+    error = _parse_openai_error(exc.payload)
+    return _normalize_error_code(error.code if error else None, error.type if error else None)
 
 
 def _raise_proxy_budget_exhausted() -> NoReturn:

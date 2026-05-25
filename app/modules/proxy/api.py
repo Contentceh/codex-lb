@@ -32,6 +32,7 @@ from app.core.openai.chat_requests import ChatCompletionsRequest
 from app.core.openai.chat_responses import ChatCompletionResult, collect_chat_completion, stream_chat_chunks
 from app.core.openai.exceptions import ClientPayloadError
 from app.core.openai.images import V1ImageResponse, V1ImagesEditsForm, V1ImagesGenerationsRequest
+from app.core.openai.model_aliases import PUBLIC_MODEL_ALIASES, resolve_public_model_alias
 from app.core.openai.model_registry import UpstreamModel, get_model_registry, is_public_model
 from app.core.openai.models import (
     CompactResponseResult,
@@ -889,6 +890,18 @@ async def _build_models_response(api_key: ApiKeyData | None) -> Response:
                 metadata=_to_model_metadata(model),
             )
         )
+    for alias, target_slug in PUBLIC_MODEL_ALIASES.items():
+        target_model = models.get(target_slug)
+        if target_model is None or not is_public_model(target_model, allowed_models):
+            continue
+        items.append(
+            ModelListItem(
+                id=alias,
+                created=created,
+                owned_by="codex-lb",
+                metadata=_to_model_metadata(target_model),
+            )
+        )
     await _release_reservation(reservation)
     return JSONResponse(content=ModelListResponse(data=items).model_dump(mode="json"))
 
@@ -1578,7 +1591,7 @@ async def _release_reservation(reservation: ApiKeyUsageReservationData | None) -
 
 def _effective_model_for_api_key(api_key: ApiKeyData | None, requested_model: str) -> str:
     if api_key is None or api_key.enforced_model is None:
-        return requested_model
+        return resolve_public_model_alias(requested_model)
     return api_key.enforced_model
 
 

@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from app.core.openai.contracts import OpenAIMessage
 from app.core.openai.message_coercion import coerce_messages
+from app.core.openai.model_aliases import resolve_public_model_alias
 from app.core.openai.requests import (
     ResponsesRequest,
     ResponsesTextControls,
@@ -18,6 +19,16 @@ from app.core.types import JsonValue
 from app.core.utils.json_guards import is_json_list, is_json_mapping
 
 _SUPPORTED_CHAT_ROLES = frozenset({"system", "developer", "user", "assistant", "tool"})
+_CHAT_RESPONSES_FORWARD_FIELDS = frozenset(
+    {
+        "model",
+        "parallel_tool_calls",
+        "prompt_cache_key",
+        "reasoning",
+        "service_tier",
+        "stream",
+    }
+)
 
 
 def _content_parts(content: JsonValue) -> list[JsonValue]:
@@ -119,18 +130,20 @@ class ChatCompletionsRequest(BaseModel):
         return self
 
     def to_responses_request(self) -> ResponsesRequest:
-        data = self.model_dump(mode="json", exclude_none=True)
-        messages = data.pop("messages")
+        raw_data = self.model_dump(mode="json", exclude_none=True)
+        messages = raw_data.pop("messages")
         messages = _sanitize_user_messages(messages)
-        data.pop("store", None)
-        data.pop("n", None)
-        data.pop("max_tokens", None)
-        data.pop("max_completion_tokens", None)
-        response_format = data.pop("response_format", None)
-        stream_options = data.pop("stream_options", None)
-        tools = _normalize_chat_tools(data.pop("tools", []))
-        tool_choice = _normalize_tool_choice(data.pop("tool_choice", None))
-        reasoning_effort = data.pop("reasoning_effort", None)
+        response_format = raw_data.pop("response_format", None)
+        stream_options = raw_data.pop("stream_options", None)
+        tools = _normalize_chat_tools(raw_data.pop("tools", []))
+        tool_choice = _normalize_tool_choice(raw_data.pop("tool_choice", None))
+        reasoning_effort = raw_data.pop("reasoning_effort", None)
+        data = {
+            key: value
+            for key, value in raw_data.items()
+            if key in _CHAT_RESPONSES_FORWARD_FIELDS
+        }
+        data["model"] = resolve_public_model_alias(cast(str, data["model"]))
         if reasoning_effort is not None and "reasoning" not in data:
             data["reasoning"] = {"effort": reasoning_effort}
         if response_format is not None:
